@@ -52,7 +52,7 @@ with open(ss) as fh:
     hdr = fh.readline().lstrip("#").rstrip("\n").split("\t")
     rows = [l.rstrip("\n").split("\t") for l in fh if l.strip()]
 # score columns = everything ending in _SUM, in file order
-sc = [i for i, h in enumerate(hdr) if h.endswith("_SUM")]
+sc = [i for i, h in enumerate(hdr) if h.endswith("_SUM") and h != "NAMED_ALLELE_DOSAGE_SUM"]
 names = [hdr[i][:-4] for i in sc]
 cols = [l.rstrip("\n").split("\t") for l in open(colf)][1:]
 want = [f"{g}|{c}" for _, g, c, _ in cols]
