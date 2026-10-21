@@ -156,10 +156,19 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
 2. **Decode dosages from the packed bed bytes directly** (2 bits/genotype →
    int8) instead of float32 through bed-reader; impute from per-SNP allele
    counts computed in the same pass.
-3. **Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
+3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are
-   then repeated per column chunk, so size the chunk to the memory budget.
+   then repeated per column chunk, so size the chunk to the memory budget.~~
+   **Done: `ct_sparse_v1`** (fixture_20k, 2 threads, rows `20261021_181102`
+   and `20261021_181256` vs `ct_sparse_v0` row `20261021_153458`). PASS at the
+   same max|diff| 5.96e-8. Wall 1:32 / 1:37 vs 1:29 (noise; the kernel is
+   22.1 s / 19.8 s vs 20.8 s, the rest is clumping). Peak RSS 2667 MB at 1 GiB
+   chunks and 1972 MB at 0.25 GiB chunks vs 3984 MB; the kernel's memory is
+   now set by `--chunk-gb`, not by n × m. SNP re-reads 1.23× / 1.34× of the
+   unique set. The chunks are unbalanced: the first 76 genes of the manifest
+   hold 22k of the 44k index SNPs, so a later variant should size chunks by
+   nnz rather than by column count.
 4. **One job per chromosome, no 12b**, resource lines at ≤16 GB / ≤4 h to
    backfill on this account.
 5. For the C+T path the same list applies to 12c, plus A1/A4 from
