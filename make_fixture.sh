@@ -84,8 +84,8 @@ join -j 2 <(awk '{print $1, $2}' "$FAM" | sort -k2,2) \
     | awk '{print $2, $1, $4}' > "$FIX/.pool.txt"        # FID IID PHENO
 n_case=$(awk '$3==2' "$FIX/.pool.txt" | wc -l); n_ctrl=$(awk '$3==1' "$FIX/.pool.txt" | wc -l)
 k_case=$(( N * n_case / (n_case + n_ctrl) )); k_ctrl=$(( N - k_case ))
-{ awk '$3==2' "$FIX/.pool.txt" | shuf --random-source=<(yes "$SEED") | head -n "$k_case"
-  awk '$3==1' "$FIX/.pool.txt" | shuf --random-source=<(yes "$SEED") | head -n "$k_ctrl"; } \
+{ awk '$3==2' "$FIX/.pool.txt" | shuf -n "$k_case" --random-source=<(yes "$SEED")
+  awk '$3==1' "$FIX/.pool.txt" | shuf -n "$k_ctrl" --random-source=<(yes "$SEED"); } \
     | sort -k2,2 > "$FIX/pheno.tab"
 awk '{print $1, $2}' "$FIX/pheno.tab" > "$FIX/.keep.txt"
 rm -f "$FIX/.pool.txt"
