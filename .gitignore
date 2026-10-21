@@ -1,6 +1,7 @@
-fixture/
+fixture*/
 golden/
 runs/
 results.tsv
 lib/ref_12_prsnet.py
 __pycache__/
+*.log
