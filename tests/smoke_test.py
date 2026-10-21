@@ -185,4 +185,17 @@ print(run(PY + [V1, "--bed", pre, "--weights", wf, "--out", f"{W}/sum_v1", "--mo
 line = run(PY + [f"{B}/compare.py", f"{W}/gold", f"{W}/sum_v1"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
 print("8. ct_sparse_v1 chunked kernel --mode sum (1-column chunks) == eqtl brute force  OK")
 
+# ct_sparse_v2's packed-bed decode: same two checks, plus a block size that does not divide the SNP count
+V2 = f"{B}/variants/ct_sparse_v2/sparse_score.py"
+print(run(PY + [V2, "--bed", pre, "--weights", f"{W}/ctw.tsv", "--out", f"{W}/ct_v2", "--mode", "ct",
+               "--thresholds", " ".join(thr), "--all-genes", f"{W}/genes_all.txt", "--block", "7", "--threads", "1",
+               "--chunk-cols", str(2 * len(thr))]).splitlines()[-1])
+line = run(PY + [f"{B}/compare.py", f"{W}/gold_ct", f"{W}/ct_v2"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+assert open(f"{W}/ct_v2/columns.tsv").read() == open(f"{W}/ct_v0/columns.tsv").read(), "v2 columns.tsv differs from v0"
+print("9. ct_sparse_v2 packed-bed kernel --mode ct (block 7, 2-gene chunks) == brute force, columns.tsv == v0  OK")
+print(run(PY + [V2, "--bed", pre, "--weights", wf, "--out", f"{W}/sum_v2", "--mode", "sum", "--block", "64", "--threads", "1",
+               "--chunk-cols", "1"]).splitlines()[-1])
+line = run(PY + [f"{B}/compare.py", f"{W}/gold", f"{W}/sum_v2"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+print("10. ct_sparse_v2 packed-bed kernel --mode sum (1-column chunks) == eqtl brute force  OK")
+
 print("\nALL SMOKE TESTS PASSED")
