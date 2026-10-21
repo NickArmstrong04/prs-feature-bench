@@ -60,12 +60,12 @@ def main():
             if key not in cols:
                 cols[key] = len(cols)
             c = cols[key]
-            # one allele per SNP row in a plink2 score file: flip betas that
-            # are given on the other allele onto the first one seen
-            if snp in snp_a1 and snp_a1[snp] != a1:
-                beta = -beta
-            else:
-                snp_a1.setdefault(snp, a1)
+            # contract: one effect allele per SNP across every gene/channel row
+            # (true of any eQTL release). A plink2 score file has one allele per
+            # SNP row and no place for the 2*beta constant a flip would need.
+            if snp_a1.setdefault(snp, a1) != a1:
+                sys.exit(f"weights: SNP {snp} is given on allele {a1} in one row and {snp_a1[snp]} in another; "
+                         "the weight contract requires one a1 per SNP -- fix the source file")
             if c in w[snp]:
                 n_a1conflict += 1          # duplicate (gene, snp, channel) row
             w[snp][c] = beta

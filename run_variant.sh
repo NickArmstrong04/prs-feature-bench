@@ -38,10 +38,10 @@ VAR=${1:-}; shift || true
 [[ -n "$VAR" && -f "$BENCH/variants/$VAR/run.sh" ]] || { echo "usage: run_variant.sh <variant> ...  (variants/: $(ls "$BENCH/variants" 2>/dev/null | tr '\n' ' '))"; exit 1; }
 [[ -f "$FIX/params.json" ]] || { echo "no fixture -- run make_fixture.sh first"; exit 1; }
 
-GOLDEN=ct; AS_GOLDEN=""; THREADS=${BENCH_THREADS:-4}; TAG=""; KEEP=0
+GOLDEN=ct; GOLDEN_SET=0; AS_GOLDEN=""; THREADS=${BENCH_THREADS:-4}; TAG=""; KEEP=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --golden)    GOLDEN=$2; shift 2 ;;
+        --golden)    GOLDEN=$2; GOLDEN_SET=1; shift 2 ;;
         --as-golden) AS_GOLDEN=$2; shift 2 ;;
         --threads)   THREADS=$2; shift 2 ;;
         --tag)       TAG=$2; shift 2 ;;
@@ -85,7 +85,9 @@ echo "done:     wall $WALL   cpu ${CPU_S}s   maxrss ${MAXRSS_MB} MB   columns $N
 
 # --- compare
 VERDICT=NOGOLDEN; DETAIL="-"
-if [[ -d "$BENCH/golden/$GOLDEN" ]]; then
+if [[ -n "$AS_GOLDEN" && $GOLDEN_SET -eq 0 ]]; then
+    echo "making golden/$AS_GOLDEN -- no comparison (pass --golden <name> to compare as well)"
+elif [[ -d "$BENCH/golden/$GOLDEN" ]]; then
     set +e
     "$BENCH_PY" "$BENCH/compare.py" "$BENCH/golden/$GOLDEN" "$OUT" --rtol "${BENCH_RTOL:-1e-5}" --atol "${BENCH_ATOL:-1e-7}" | tee "$OUT/compare.txt"
     CRC=${PIPESTATUS[0]}

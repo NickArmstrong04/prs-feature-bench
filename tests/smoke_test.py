@@ -90,12 +90,13 @@ to_bed(pre + ".bed", G, properties={"fid": [f"F{i}" for i in range(ns)], "iid": 
                                     "allele_1": a1, "allele_2": a2})
 # weights: 20 genes x 3 channels, 2-15 SNPs each, half given on a2
 wf = f"{W}/w.tsv"; truth = {}
+flip_of = rng.random(m) < 0.5                               # one effect allele per SNP (the contract)
 with open(wf, "w") as w:
     w.write("gene\tsnp\ta1\tchannel\tbeta\n")
     for g in range(20):
         for ch in ("Tcell", "Bcell", "mono"):
             k = rng.integers(2, 16); js = rng.choice(m, k, replace=False)
-            betas = rng.normal(size=k); flip = rng.random(k) < 0.5
+            betas = rng.normal(size=k); flip = flip_of[js]
             truth[(f"G{g}", ch)] = (js, betas, flip)
             for j, b, f in zip(js, betas, flip):
                 w.write(f"G{g}\t{sid[j]}\t{a2[j] if f else a1[j]}\t{ch}\t{float(b)!r}\n")
@@ -121,5 +122,10 @@ print(run(PY + [f"{B}/eqtl/weights_to_plink2.py", wf, pre + ".bim", f"{W}/wide.t
 wcols = [tuple(l.split("\t")[1:3]) for l in open(f"{W}/wide.tsv.columns.tsv").read().splitlines()[1:]]
 assert set(wcols) == set(ref_cols), "wide file column set"
 hdr = open(f"{W}/wide.tsv").readline().split("\t"); assert len(hdr) == 2 + len(wcols)
-print("4. weights_to_plink2: 60 columns, 2 rows dropped  OK")
+j0 = int(next(iter(truth.values()))[0][0])                    # a SNP that is in the file
+other = a1[j0] if flip_of[j0] else a2[j0]                         # the allele the file did NOT use
+open(f"{W}/w_conflict.tsv", "w").write(open(wf).read() + f"G0\t{sid[j0]}\t{other}\tTcell\t0.1\n")
+r = subprocess.run(PY + [f"{B}/eqtl/weights_to_plink2.py", f"{W}/w_conflict.tsv", pre + ".bim", f"{W}/wide2.tsv"], capture_output=True, text=True)
+assert r.returncode != 0 and "one a1 per SNP" in r.stdout + r.stderr, r.stdout + r.stderr
+print("4. weights_to_plink2: 60 columns, 2 rows dropped; conflicting a1 rejected  OK")
 print("\nALL SMOKE TESTS PASSED")

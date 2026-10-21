@@ -26,6 +26,7 @@ def main():
         for l in fh:
             f = l.split(); alleles[f[1]] = (f[4], f[5])
     chans = a.channels.split(",")
+    orient = {}                      # one effect allele per SNP, as in a real eQTL release
     n_rows = n_genes = 0
     with open(a.out, "w") as w:
         w.write("gene\tsnp\ta1\tchannel\tbeta\n")
@@ -38,7 +39,7 @@ def main():
             pick = rng.sample(snps, min(a.snps_per_gene, len(snps)))
             for ch in chans:
                 for s in pick:
-                    a1 = alleles[s][1] if rng.random() < 0.5 else alleles[s][0]
+                    a1 = orient.setdefault(s, alleles[s][1] if rng.random() < 0.5 else alleles[s][0])
                     w.write(f"{gene}\t{s}\t{a1}\t{ch}\t{rng.gauss(0, 0.3):.8g}\n")
                     n_rows += 1
     print(f"synthetic weights: {n_genes} genes x {len(chans)} channels, {n_rows} rows -> {a.out}")
