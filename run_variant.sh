@@ -33,7 +33,10 @@
 set -euo pipefail
 
 BENCH=$(cd "$(dirname "$0")" && pwd)
-FIX=$BENCH/fixture
+FIX=${BENCH_FIXTURE:-$BENCH/fixture}            # another fixture dir (a timing fixture, say)
+FIX=$(cd "$FIX" && pwd)
+if [[ "$FIX" == "$BENCH/fixture" ]]; then GOLD=$BENCH/golden; else GOLD=$FIX/golden; fi   # goldens belong to a fixture
+FIXNAME=$(basename "$FIX")
 VAR=${1:-}; shift || true
 [[ -n "$VAR" && -f "$BENCH/variants/$VAR/run.sh" ]] || { echo "usage: run_variant.sh <variant> ...  (variants/: $(ls "$BENCH/variants" 2>/dev/null | tr '\n' ' '))"; exit 1; }
 [[ -f "$FIX/params.json" ]] || { echo "no fixture -- run make_fixture.sh first"; exit 1; }
@@ -50,17 +53,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+[[ "$FIXNAME" == fixture ]] || TAG="[$FIXNAME] $TAG"
 export BENCH_THREADS=$THREADS BENCH_LIB=$BENCH/lib BENCH_PY=${BENCH_PY:-python3}
 export OMP_NUM_THREADS=$THREADS OPENBLAS_NUM_THREADS=$THREADS MKL_NUM_THREADS=$THREADS
 STAMP=$(date +%Y%m%d_%H%M%S)
 OUT=$BENCH/runs/${VAR}_$STAMP
-mkdir -p "$OUT" "$BENCH/golden"
+mkdir -p "$OUT" "$GOLD"
 COMMIT=$(git -C "$BENCH" rev-parse --short HEAD 2>/dev/null || echo nogit)
 DIRTY=$(git -C "$BENCH" status --porcelain "variants/$VAR" 2>/dev/null | grep -q . && echo "+dirty" || true)
 HOST=$(hostname -s)
 
 echo "variant:  $VAR  ($COMMIT$DIRTY)   threads $THREADS   host $HOST"
-echo "fixture:  $(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["disease"]+"/"+d["cohort"]+" chr"+str(d["chr"])+"  "+str(d["n_samples"])+" x "+str(d["n_variants"]))' "$FIX/params.json")"
+echo "fixture:  $FIXNAME  $(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["disease"]+"/"+d["cohort"]+" chr"+str(d["chr"])+"  "+str(d["n_samples"])+" x "+str(d["n_variants"]))' "$FIX/params.json")"
 echo "out:      $OUT"
 
 # --- run, timed; /usr/bin/time -v gives wall time + MaxRSS (KB)
@@ -87,15 +91,15 @@ echo "done:     wall $WALL   cpu ${CPU_S}s   maxrss ${MAXRSS_MB} MB   columns $N
 VERDICT=NOGOLDEN; DETAIL="-"
 if [[ -n "$AS_GOLDEN" && $GOLDEN_SET -eq 0 ]]; then
     echo "making golden/$AS_GOLDEN -- no comparison (pass --golden <name> to compare as well)"
-elif [[ -d "$BENCH/golden/$GOLDEN" ]]; then
+elif [[ -d "$GOLD/$GOLDEN" ]]; then
     set +e
-    "$BENCH_PY" "$BENCH/compare.py" "$BENCH/golden/$GOLDEN" "$OUT" --rtol "${BENCH_RTOL:-1e-5}" --atol "${BENCH_ATOL:-1e-7}" | tee "$OUT/compare.txt"
+    "$BENCH_PY" "$BENCH/compare.py" "$GOLD/$GOLDEN" "$OUT" --rtol "${BENCH_RTOL:-1e-5}" --atol "${BENCH_ATOL:-1e-7}" | tee "$OUT/compare.txt"
     CRC=${PIPESTATUS[0]}
     set -e
     VERDICT=$([[ $CRC -eq 0 ]] && echo PASS || echo FAIL)
     DETAIL=$(tail -n 1 "$OUT/compare.txt")
 else
-    echo "no golden/$GOLDEN -- fidelity not checked"
+    echo "no $GOLD/$GOLDEN -- fidelity not checked"
 fi
 
 [[ -f "$BENCH/results.tsv" ]] || printf 'stamp\tvariant\tcommit\tthreads\twall\tcpu_s\tmaxrss_mb\tverdict\tdetail\ttag\n' > "$BENCH/results.tsv"
@@ -104,11 +108,11 @@ echo "results:  $VERDICT  -> results.tsv"
 
 # --- promote to golden
 if [[ -n "$AS_GOLDEN" ]]; then
-    [[ -d "$BENCH/golden/$AS_GOLDEN" ]] && { echo "golden/$AS_GOLDEN exists -- remove it by hand if you really mean to replace it"; exit 3; }
-    mkdir -p "$BENCH/golden/$AS_GOLDEN"
-    cp "$OUT"/{samples.txt,columns.tsv,scores.f32,run.log} "$BENCH/golden/$AS_GOLDEN/"
-    printf 'variant\t%s\ncommit\t%s\nstamp\t%s\nthreads\t%s\nwall\t%s\n' "$VAR" "$COMMIT$DIRTY" "$STAMP" "$THREADS" "$WALL" > "$BENCH/golden/$AS_GOLDEN/provenance.tsv"
-    echo "stored:   golden/$AS_GOLDEN  (from $VAR @ $COMMIT$DIRTY)"
+    [[ -d "$GOLD/$AS_GOLDEN" ]] && { echo "$GOLD/$AS_GOLDEN exists -- remove it by hand if you really mean to replace it"; exit 3; }
+    mkdir -p "$GOLD/$AS_GOLDEN"
+    cp "$OUT"/{samples.txt,columns.tsv,scores.f32,run.log} "$GOLD/$AS_GOLDEN/"
+    printf 'variant\t%s\ncommit\t%s\nstamp\t%s\nthreads\t%s\nwall\t%s\nfixture\t%s\n' "$VAR" "$COMMIT$DIRTY" "$STAMP" "$THREADS" "$WALL" "$FIX" > "$GOLD/$AS_GOLDEN/provenance.tsv"
+    echo "stored:   $GOLD/$AS_GOLDEN  (from $VAR @ $COMMIT$DIRTY)"
 fi
 
 # --- clean up bulky run output unless asked to keep it

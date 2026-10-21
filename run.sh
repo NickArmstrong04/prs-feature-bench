@@ -1,74 +1,64 @@
 #!/bin/bash
 # =============================================================================
-#  variants/ref_eqtl_plink2/run.sh -- the ORACLE for eQTL-weighted features
+#  variants/ct_sparse_v0/run.sh -- C+T features through the SHARED KERNEL
 #
-#  Feature (i, gene g, channel c) = sum_j  w_{j,g,c} * dosage_i(a1_j)
-#  i.e. predicted expression of g in cell type c for person i, with missing
-#  calls mean-imputed (plink2's default; the same rule 12c uses).
+#  Same clumping as ref_ct (the authors' per-gene plink --clump), then the
+#  index SNPs become a weight file (lib/make_ct_weights.py: one row per gene
+#  x index SNP, channel = P-bin) and lib/sparse_score.py --mode ct computes
+#  every gene x threshold average in one sparse matmul + cumsum. Compared
+#  with golden/ct this proves the kernel reproduces 12c; the same kernel in
+#  --mode sum is the eQTL path.
 #
-#  This variant asks plink2 to compute every column at once from one wide
-#  score file (multi-column --score, scoresums). It is slow-ish and exact;
-#  it is what golden/eqtl_<set> is made from. Fast variants are compared
-#  against it. Do not optimise this file.
-#
-#  Needs fixture/weights/$WEIGHTS.tsv (contract in eqtl/weights_to_plink2.py).
-#  Called by run_variant.sh as:  WEIGHTS=<set> run.sh <fixture_dir> <out_dir>
+#  Called by run_variant.sh as:  run.sh <fixture_dir> <out_dir>
 # =============================================================================
 set -euo pipefail
 FIX=$1; OUT=$2
-W=$OUT/work; mkdir -p "$W"
-PY=${BENCH_PY:-python3}; NT=${BENCH_THREADS:-4}
-WEIGHTS=${WEIGHTS:-onek1k}
-WFILE=$FIX/weights/$WEIGHTS.tsv
-[[ -f "$WFILE" ]] || { echo "no weight set: $WFILE  (see eqtl/README section of README.md)"; exit 1; }
-BENCH=$(cd "$(dirname "$0")/../.." && pwd)
+W=$OUT/work; mkdir -p "$W/clumps" "$W/chunks"
+PY=${BENCH_PY:-python3}; LIB=${BENCH_LIB:?}; NT=${BENCH_THREADS:-4}
 
-if ! command -v plink2 >/dev/null 2>&1 && command -v module >/dev/null 2>&1; then
-    module load PLINK/2_avx2_20250707 2>/dev/null || true
-fi
-command -v plink2 >/dev/null || { echo "plink2 not found"; exit 1; }
-
-"$PY" "$BENCH/eqtl/weights_to_plink2.py" "$WFILE" "$FIX/geno.bim" "$W/wide.tsv" --min-snps 1
-NCOL=$(awk 'NR>1' "$W/wide.tsv.columns.tsv" | wc -l)
-(( NCOL > 0 )) || { echo "no usable columns"; exit 1; }
-
-# plink2 --score: col 1 = SNP, col 2 = A1, score columns 3..(NCOL+2);
-# header-read names the scores; scoresums instead of averages.
-# plink2's cols= syntax and the exact SUM column names changed between
-# releases -- the first run on Bouchet should confirm the header printed
-# below (the production `check` had the same kind of surprise, C.6 (3)).
-plink2 --bfile "$FIX/geno" \
-       --score "$W/wide.tsv" 1 2 header-read cols=+scoresums,-scoreavgs \
-       --score-col-nums 3-$((NCOL + 2)) \
-       --out "$W/oracle" --threads "$NT" --memory 8000 > "$W/plink2.log" 2>&1 \
-    || { tail -n 20 "$W/plink2.log"; exit 1; }
-head -c 400 "$W/oracle.sscore" | head -n 1 | cut -c1-200; echo
-
-# .sscore -> harness layout (columns in the wide file's order)
-"$PY" - "$W/oracle.sscore" "$W/wide.tsv.columns.tsv" "$OUT" <<'EOF'
-import sys, numpy as np
-ss, colf, out = sys.argv[1:4]
-with open(ss) as fh:
-    hdr = fh.readline().lstrip("#").rstrip("\n").split("\t")
-    rows = [l.rstrip("\n").split("\t") for l in fh if l.strip()]
-# score columns = everything ending in _SUM, in file order
-sc = [i for i, h in enumerate(hdr) if h.endswith("_SUM") and h != "NAMED_ALLELE_DOSAGE_SUM"]
-names = [hdr[i][:-4] for i in sc]
-cols = [l.rstrip("\n").split("\t") for l in open(colf)][1:]
-want = [f"{g}|{c}" for _, g, c, _ in cols]
-assert names == want, f"plink2 column order differs from the wide file: {names[:3]} vs {want[:3]}"
-fid_i, iid_i = hdr.index("FID") if "FID" in hdr else 0, hdr.index("IID")
-n, m = len(rows), len(sc)
-S = np.memmap(f"{out}/scores.f32", dtype=np.float32, mode="w+", shape=(n, m))
-for r, f in enumerate(rows):
-    S[r, :] = np.array([f[i] for i in sc], dtype=np.float64)
-S.flush()
-with open(f"{out}/samples.txt", "w") as w:
-    for f in rows:
-        w.write(f"{f[fid_i]}\t{f[iid_i]}\n")
-with open(f"{out}/columns.tsv", "w") as w:
-    w.write("col\tgene\tchannel\tn_snps\n")
-    for j, (_, g, c, k) in enumerate(cols):
-        w.write(f"{j}\t{g}\t{c}\t{k}\n")
-print(f"oracle: {n} samples x {m} columns -> {out}")
+# fixture params
+eval "$("$PY" - "$FIX/params.json" <<'EOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(f'CHR={d["chr"]}; R2={d["clump_r2"]}; KB={d["clump_kb"]}; THR="{d["thresholds"]}"; GIANT={d["giant_window_mb"]}')
 EOF
+)"
+
+# plink 1.9: module on Bouchet, PATH elsewhere
+if ! command -v plink >/dev/null 2>&1 && command -v module >/dev/null 2>&1; then
+    module load PLINK/1.9b_7.11-x86_64 2>/dev/null || true
+fi
+command -v plink >/dev/null || { echo "plink (1.9) not found"; exit 1; }
+
+# --- 12b: the authors' per-gene clump, same flags as production clump_one
+clump_one() {
+    local g=$1
+    plink --bfile "$FIX/geno" --extract "$FIX/genes/$g.snplist" --chr "$CHR" \
+          --clump-p1 1 --clump-r2 "$R2" --clump-kb "$KB" \
+          --clump "$FIX/genes/$g.assoc" "$FIX/gwas.QC.txt" --clump-index-first \
+          --clump-snp-field SNP --clump-field P \
+          --out "$W/clumps/$g" --memory 1500 --threads 1 > /dev/null 2>&1 || true
+}
+export -f clump_one; export FIX W CHR R2 KB
+awk 'NR>1 && $4>0 {print $1}' "$FIX/gene_manifest.tsv" > "$W/genes.txt"
+echo "clumping $(wc -l < "$W/genes.txt") genes, $NT at a time  ($(date +%T))"
+xargs -a "$W/genes.txt" -P "$NT" -I{} bash -c 'clump_one "$1"' _ {}
+
+# clump_manifest.tsv: identical awk to 12_prsnet.sh write_12b_results
+awk -v D="$W/clumps" 'BEGIN{OFS="\t"}
+     NR==1 {print $0, "n_index", "status"; next}
+     { n=0; st="nosnp"
+       if ($4>0) { f=D"/"$1".clumped"; st="failed"
+           if ((getline l < f) > 0) { st="ok"; while ((getline l < f) > 0) { split(l,a," "); if (length(a)>=3) n++ } }
+           close(f) }
+       print $0, n, st }' "$FIX/gene_manifest.tsv" > "$W/clump_manifest.tsv"
+nfail=$(awk 'NR>1 && $7=="failed"' "$W/clump_manifest.tsv" | wc -l)
+echo "clumped: $(awk 'NR>1 && $7=="ok"' "$W/clump_manifest.tsv" | wc -l) ok, $nfail failed  ($(date +%T))"
+(( nfail == 0 )) || { awk 'NR>1 && $7=="failed" {print "  failed:", $1}' "$W/clump_manifest.tsv"; exit 1; }
+
+# --- the shared kernel instead of 12c
+"$PY" "$LIB/make_ct_weights.py" --clumps "$W/clumps" --manifest "$W/clump_manifest.tsv" \
+    --gwas "$FIX/gwas.QC.txt" --pvalue "$FIX/SNP.pvalue" --thresholds "$THR" \
+    --out "$W/ct_weights.tsv" --genes-out "$W/genes_all.txt"
+"$PY" "$LIB/sparse_score.py" --bed "$FIX/geno" --weights "$W/ct_weights.tsv" --out "$OUT" \
+    --mode ct --thresholds "$THR" --all-genes "$W/genes_all.txt" --block "${BLOCK:-4000}" --threads "$NT"

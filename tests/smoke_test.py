@@ -128,4 +128,48 @@ open(f"{W}/w_conflict.tsv", "w").write(open(wf).read() + f"G0\t{sid[j0]}\t{other
 r = subprocess.run(PY + [f"{B}/eqtl/weights_to_plink2.py", f"{W}/w_conflict.tsv", pre + ".bim", f"{W}/wide2.tsv"], capture_output=True, text=True)
 assert r.returncode != 0 and "one a1 per SNP" in r.stdout + r.stderr, r.stdout + r.stderr
 print("4. weights_to_plink2: 60 columns, 2 rows dropped; conflicting a1 rejected  OK")
+# ---- 5. shared kernel, ct mode: clumps -> weights -> nested averages vs brute force
+thr = ["1e-5", "1e-3", "0.05", "0.5", "1"]            # 5 thresholds, bins nested
+C = f"{W}/clumps"; os.makedirs(C)
+with open(f"{W}/gwas.QC.txt", "w") as g, open(f"{W}/SNP.pvalue", "w") as pv:
+    g.write("\t".join(f"c{i}" for i in range(1, 13)) + "\n"); pv.write("SNP\tP\n")
+    beta_all = rng.normal(size=m); p_all = 10 ** rng.uniform(-7, 0.3, size=m)   # some P > 1 -> above top threshold? no: P<=1 always; use 0.3 to get P>1 rows
+    eff_all = [a2[j] if rng.random() < 0.5 else a1[j] for j in range(m)]       # effect allele, either bim allele
+    for j in range(m):
+        g.write(f"x\tx\t{sid[j]}\t{eff_all[j]}\tx\tx\tx\tx\tx\tx\tx\t{float(beta_all[j])!r}\n")
+        pv.write(f"{sid[j]}\t{float(p_all[j])!r}\n")
+gene_snps = {}
+with open(f"{W}/clump_manifest.tsv", "w") as man:
+    man.write("gene\tchr\tstart\tend\tn_snps\tbig\tn_index\tstatus\n")
+    for gq in range(12):
+        js = sorted(rng.choice(m, int(rng.integers(1, 25)), replace=False))
+        gene_snps[f"CG{gq}"] = js
+        with open(f"{C}/CG{gq}.clumped", "w") as cf:
+            cf.write(" CHR    F         SNP         BP        P    TOTAL   NSIG    S05    S01   S001  S0001    SP2\n")
+            for j in js:
+                cf.write(f" 19    1  {sid[j]}  {1000+j}  {p_all[j]:.3g}  0 0 0 0 0 0 NONE\n")
+        man.write(f"CG{gq}\t19\t0\t0\t{len(js)}\t0\t{len(js)}\tok\n")
+    man.write("CG_EMPTY\t19\t0\t0\t0\t0\t0\tnosnp\n")
+# brute force 12c: AVG(t) = sum_{j in I_g, P_j<=t} beta_j * dose_j(effect allele) / (2*count), 0 if count 0
+R, ref_cols = [], []
+for gname in [f"CG{q}" for q in range(12)] + ["CG_EMPTY"]:
+    for t in thr:
+        js = [j for j in gene_snps.get(gname, []) if p_all[j] <= float(t)]
+        sc = np.zeros(ns)
+        for j in js:
+            dose = D[:, j] if eff_all[j] == a1[j] else 2 - D[:, j]
+            sc += beta_all[j] * dose
+        R.append(sc / (2 * len(js)) if js else sc); ref_cols.append((gname, f"P<={t}"))
+write_std(f"{W}/gold_ct", [f"I{i}" for i in range(ns)], ref_cols, np.array(R).T)
+print(run(PY + [f"{B}/lib/make_ct_weights.py", "--clumps", C, "--manifest", f"{W}/clump_manifest.tsv", "--gwas", f"{W}/gwas.QC.txt",
+               "--pvalue", f"{W}/SNP.pvalue", "--thresholds", " ".join(thr), "--out", f"{W}/ctw.tsv", "--genes-out", f"{W}/genes_all.txt"]).strip())
+print(run(PY + [f"{B}/lib/sparse_score.py", "--bed", pre, "--weights", f"{W}/ctw.tsv", "--out", f"{W}/ct_v0", "--mode", "ct",
+               "--thresholds", " ".join(thr), "--all-genes", f"{W}/genes_all.txt", "--block", "50", "--threads", "1"]).splitlines()[-1])
+line = run(PY + [f"{B}/compare.py", f"{W}/gold_ct", f"{W}/ct_v0"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+print("5. sparse_score --mode ct == brute-force 12c formula (nested bins, zero gene, both effect alleles)  OK")
+# and sum mode of the shared kernel against the same eQTL brute force as step 3
+print(run(PY + [f"{B}/lib/sparse_score.py", "--bed", pre, "--weights", wf, "--out", f"{W}/sum_v0", "--mode", "sum", "--block", "64", "--threads", "1"]).splitlines()[-1])
+line = run(PY + [f"{B}/compare.py", f"{W}/gold", f"{W}/sum_v0"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+print("6. sparse_score --mode sum == eqtl brute force  OK")
+
 print("\nALL SMOKE TESTS PASSED")

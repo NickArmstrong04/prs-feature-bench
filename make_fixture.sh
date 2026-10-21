@@ -32,7 +32,7 @@ set -euo pipefail
 DISEASE=${DISEASE:-ad}; COHORT=${COHORT:-eur}; CHR=${CHR:-19}; N=${N:-2000}; SEED=${SEED:-7}
 ROOT=${ROOT:-/home/naa79/project_pi_sz622/naa79/prs-benchmark}
 BENCH=${BENCH:-$(cd "$(dirname "$0")" && pwd)}
-FIX=$BENCH/fixture
+FIX=${BENCH_FIXTURE:-$BENCH/fixture}        # a second fixture: BENCH_FIXTURE=$BENCH/fixture_20k N=20000 ...
 
 export DISEASE COHORT CHR
 source "$ROOT/scripts/slurm/config.sh"
