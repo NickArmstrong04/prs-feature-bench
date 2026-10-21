@@ -40,24 +40,46 @@ source "$ROOT/scripts/slurm/config.sh"
 for v in PNET_CHR GQC PHENO PRSNET_WINDOWS PRSNET_THRESHOLDS PRSNET_CLUMP_R2 PRSNET_CLUMP_KB PLINK_MODULE; do
     [[ -n "${!v:-}" ]] || { echo "config.sh does not define $v"; exit 1; }
 done
-BED=$PNET_CHR/target_chr${CHR}.PH
-for f in "$BED.bed" "$BED.bim" "$BED.fam" "$GQC/gwas.QC.txt" "$GQC/SNP.pvalue" "$PHENO" \
-         "$PRSNET_WINDOWS" "$PNET_CHR/gene_manifest.tsv" "$ROOT/scripts/slurm/12_prsnet.py"; do
+for f in "$GQC/gwas.QC.txt" "$GQC/SNP.pvalue" "$PHENO" "$PRSNET_WINDOWS" \
+         "$PNET_CHR/gene_manifest.tsv" "$PNET_CHR/window.snplist" "$ROOT/scripts/slurm/12_prsnet.py"; do
     [[ -f "$f" ]] || { echo "MISSING: $f"; exit 1; }
 done
 [[ -d "$PNET_CHR/genes" ]] || { echo "MISSING: $PNET_CHR/genes (run 12a for chr$CHR)"; exit 1; }
 
+# Genotype source. Preferred: 12a's cohort bed (window SNPs, A1 = effect
+# allele). It is a regenerable intermediate and may have been deleted; then
+# fall back to 12a's own command against the raw release, restricted to the
+# fixture's people -- same --extract, same --a1-allele, so the same variants
+# and orientation come out. The raw chromosome is streamed once (minutes).
+BED=$PNET_CHR/target_chr${CHR}.PH
+if [[ -f "$BED.bed" && -f "$BED.bim" && -f "$BED.fam" ]]; then
+    MODE=cohort
+else
+    MODE=raw
+    for v in GENO_PREFIX MIS; do [[ -n "${!v:-}" ]] || { echo "config.sh does not define $v (needed for the raw fallback)"; exit 1; }; done
+    for f in "$GENO_PREFIX.bed" "$GENO_PREFIX.bim" "$GENO_PREFIX.fam" "$MIS/target_data.a1"; do
+        [[ -f "$f" ]] || { echo "MISSING: $f"; exit 1; }
+    done
+fi
+
 module load "$PLINK_MODULE"
 command -v plink >/dev/null || { echo "plink not on PATH after module load $PLINK_MODULE"; exit 1; }
 
-echo "source:   $DISEASE/$COHORT chr$CHR  ($(wc -l < "$BED.fam") samples, $(wc -l < "$BED.bim") window SNPs)"
+if [[ $MODE == cohort ]]; then
+    echo "source:   $DISEASE/$COHORT chr$CHR cohort bed  ($(wc -l < "$BED.fam") samples, $(wc -l < "$BED.bim") window SNPs)"
+    FAM=$BED.fam
+else
+    echo "source:   $DISEASE/$COHORT chr$CHR -- cohort bed absent, building from the RAW release"
+    echo "          $GENO_PREFIX  (--keep fixture people, --extract $(wc -l < "$PNET_CHR/window.snplist") window SNPs, --a1-allele)"
+    FAM=$GENO_PREFIX.fam
+fi
 echo "fixture:  $FIX  (N=$N, seed $SEED)"
 mkdir -p "$FIX/genes" "$BENCH/lib"
 
-# --- 1. stratified sample of N people present in both the bed and the phenotype
+# --- 1. stratified sample of N people present in both the genotypes and the phenotype
 #     pheno.tab: FID IID PHENO (1=control, 2=case), no header
 export LC_ALL=C
-join -j 2 <(awk '{print $1, $2}' "$BED.fam" | sort -k2,2) \
+join -j 2 <(awk '{print $1, $2}' "$FAM" | sort -k2,2) \
           <(awk '{print $1, $2, $3}' "$PHENO" | sort -k2,2) \
     | awk '{print $2, $1, $4}' > "$FIX/.pool.txt"        # FID IID PHENO
 n_case=$(awk '$3==2' "$FIX/.pool.txt" | wc -l); n_ctrl=$(awk '$3==1' "$FIX/.pool.txt" | wc -l)
@@ -70,11 +92,25 @@ rm -f "$FIX/.pool.txt"
 echo "sampled:  $(wc -l < "$FIX/pheno.tab") people ($k_case cases / $k_ctrl controls; pool $n_case / $n_ctrl)"
 
 # --- 2. the genotype fixture: same variants, same A1, N people
-plink --bfile "$BED" --keep "$FIX/.keep.txt" --make-bed --out "$FIX/geno" --memory 4000 --threads 2 > "$FIX/.plink.log" 2>&1 \
-    || { cat "$FIX/.plink.log"; exit 1; }
-rm -f "$FIX/.keep.txt" "$FIX/geno.nosex"
-cmp -s <(awk '{print $2, $5}' "$BED.bim") <(awk '{print $2, $5}' "$FIX/geno.bim") \
-    || { echo "ERROR: fixture .bim A1 differs from the source .bim (plink flipped something)"; exit 1; }
+if [[ $MODE == cohort ]]; then
+    plink --bfile "$BED" --keep "$FIX/.keep.txt" --make-bed --out "$FIX/geno" \
+          --memory 4000 --threads 2 > "$FIX/.plink.log" 2>&1 || { cat "$FIX/.plink.log"; exit 1; }
+    rm -f "$FIX/.keep.txt" "$FIX/geno.nosex"
+    cmp -s <(awk '{print $2, $5}' "$BED.bim") <(awk '{print $2, $5}' "$FIX/geno.bim") \
+        || { echo "ERROR: fixture .bim A1 differs from the source .bim (plink flipped something)"; exit 1; }
+else
+    # 12a's command (12_prsnet.sh step_12a), keep list = the fixture's people
+    plink --bfile "$GENO_PREFIX" --keep "$FIX/.keep.txt" --extract "$PNET_CHR/window.snplist" \
+          --a1-allele "$MIS/target_data.a1" --make-bed --out "$FIX/geno" \
+          --memory 4000 --threads 2 > "$FIX/.plink.log" 2>&1 || { cat "$FIX/.plink.log"; exit 1; }
+    rm -f "$FIX/.keep.txt" "$FIX/geno.nosex"
+    # orientation check, as 12a does it: .bim A1 (col 5) must equal gwas A1 (col 4) for every variant
+    join -1 2 -2 3 <(sort -k2,2 "$FIX/geno.bim") <(tail -n +2 "$GQC/gwas.QC.txt" | sort -k3,3) \
+      | awk '{if($5==$9) m++; else x++} END{printf "A1 vs gwas effect allele: %d match, %d mismatch\n", m+0, x+0; exit (x>0)}' \
+      || { echo "ERROR: fixture A1 is not the GWAS effect allele for some variants"; exit 1; }
+    n_win=$(wc -l < "$PNET_CHR/window.snplist"); n_got=$(wc -l < "$FIX/geno.bim")
+    (( n_got == n_win )) || echo "NOTE: $n_got of $n_win window SNPs written (12a's own bed had the same property if 03 dropped variants)"
+fi
 echo "geno:     $(wc -l < "$FIX/geno.bim") variants x $(wc -l < "$FIX/geno.fam") samples, $(du -h "$FIX/geno.bed" | cut -f1)"
 
 # --- 3. sumstats, p-values, windows, manifest, per-gene files
@@ -96,7 +132,7 @@ cat > "$FIX/params.json" <<EOF
   "thresholds": "$PRSNET_THRESHOLDS",
   "clump_r2": $PRSNET_CLUMP_R2, "clump_kb": $PRSNET_CLUMP_KB,
   "giant_window_mb": ${PRSNET_GIANT_MB:-20},
-  "source_bed": "$BED",
+  "source_mode": "$MODE", "source_bed": "$([[ $MODE == cohort ]] && echo "$BED" || echo "$GENO_PREFIX")",
   "source_scorer": "$ROOT/scripts/slurm/12_prsnet.py",
   "built": "$(date -Is)"
 }
