@@ -60,7 +60,7 @@ DIRTY=$(git -C "$BENCH" status --porcelain "variants/$VAR" 2>/dev/null | grep -q
 HOST=$(hostname -s)
 
 echo "variant:  $VAR  ($COMMIT$DIRTY)   threads $THREADS   host $HOST"
-echo "fixture:  $(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(f"{d[\"disease\"]}/{d[\"cohort\"]} chr{d[\"chr\"]}  {d[\"n_samples\"]} x {d[\"n_variants\"]}")' "$FIX/params.json")"
+echo "fixture:  $(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["disease"]+"/"+d["cohort"]+" chr"+str(d["chr"])+"  "+str(d["n_samples"])+" x "+str(d["n_variants"]))' "$FIX/params.json")"
 echo "out:      $OUT"
 
 # --- run, timed; /usr/bin/time -v gives wall time + MaxRSS (KB)
