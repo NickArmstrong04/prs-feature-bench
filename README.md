@@ -153,9 +153,17 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
 
 1. **Read only SNPs that carry weight** (v0 already does) and sort them so bed
    reads are sequential per block.
-2. **Decode dosages from the packed bed bytes directly** (2 bits/genotype →
+2. ~~**Decode dosages from the packed bed bytes directly** (2 bits/genotype →
    int8) instead of float32 through bed-reader; impute from per-SNP allele
-   counts computed in the same pass.
+   counts computed in the same pass.~~
+   **Done: `ct_sparse_v2`** (fixture_20k, 2 threads, 1 GiB chunks; row
+   `20261021_183438` vs `ct_sparse_v1` row `20261021_181102`). PASS, bit-identical
+   to golden/ct (max|diff| 0). Kernel 16.6 s vs 22.1 s (−25%); wall 1:35.92 vs
+   1:32.39 is clumping noise. Kernel split: read 0.1 s, decode+impute 3.3 s,
+   cast-to-float64 3.9 s, sparse matmul 5.4 s, write 1.0 s — the float64 path
+   (the block cast plus scipy's `(c, n)` temporary) is 9.3 s of 16.6 and is the
+   next target. Peak RSS 3700 MB vs 2667 MB: the `.bed` memmap's file-backed
+   pages count toward RSS; read the block's row span with `np.fromfile` instead.
 3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are
