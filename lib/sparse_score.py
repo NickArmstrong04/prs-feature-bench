@@ -22,7 +22,11 @@ matrix; the orientation of a1 against the .bim is folded into the weights
 dosage columns is needed.
 
 This is v0 of the shared kernel: plain and readable. Optimisations go in
-copies under variants/, never here.
+copies under variants/, never here. Memory: one float64 array of
+n x columns (the matmul result) is the working set; the ct post-processing is
+in place and the float32 output is streamed. 381k x 11 x ~1,500 genes is
+~50 GB, so a per-chromosome job at production scale needs column chunking
+(README section 7, item 3) -- that is the first optimisation to make.
 """
 import argparse, os, time
 import numpy as np
@@ -30,12 +34,18 @@ import scipy.sparse as sp
 from bed_reader import open_bed
 
 
-def load_weights(path, bed, thresholds=None):
-    """-> (W csr (n_bim_snps x m), const (m,), colmeta [[gene, channel, n_snps]], used snp rows)"""
+def load_weights(path, bed, fixed_cols=None):
+    """-> (W csr (n_bim_snps x m), const (m,), colmeta [[gene, channel, n_snps]], used snp rows)
+    fixed_cols: optional list of (gene, channel) defining the column layout up front
+    (ct mode: every gene x bin, gene-major); rows whose column is not in it are an error."""
     sid = {s: i for i, s in enumerate(bed.sid)}
     a1s, a2s = bed.allele_1, bed.allele_2
     rows, cols, vals = [], [], []
-    colidx, colmeta, const = {}, [], []
+    if fixed_cols is None:
+        colidx, colmeta, const = {}, [], []
+    else:
+        colidx = {k: j for j, k in enumerate(fixed_cols)}
+        colmeta = [[g, c, 0] for g, c in fixed_cols]; const = [0.0] * len(fixed_cols)
     snp_a1 = {}
     n_in = n_nobim = n_badallele = 0
     with open(path) as fh:
@@ -60,6 +70,8 @@ def load_weights(path, bed, thresholds=None):
                 raise SystemExit(f"weights: SNP {f[ix['snp']]} given on two alleles ({a1}, {snp_a1[r]}); one a1 per SNP")
             key = (f[ix["gene"]], f[ix["channel"]])
             if key not in colidx:
+                if fixed_cols is not None:
+                    raise SystemExit(f"weights: column {key} is not in the fixed layout (gene not in --all-genes, or bad bin label)")
                 colidx[key] = len(colmeta); colmeta.append([key[0], key[1], 0]); const.append(0.0)
             c = colidx[key]
             rows.append(r); cols.append(c); vals.append(w); const[c] += c0; colmeta[c][2] += 1
@@ -85,35 +97,29 @@ def matmul_blocks(bed, W, used, block, threads):
     return S
 
 
-def ct_finish(S, colmeta, thresholds, all_genes=()):
-    """Nested-threshold averages from per-bin sums: cumsum over bins, / (2*cumcount).
-    Genes in all_genes with no weight (no index SNP) get all-zero columns, as 12c."""
-    labels = [f"P<={t}" for t in thresholds]
-    lab_ix = {l: k for k, l in enumerate(labels)}
-    genes = []
-    gi = {}
-    for g in all_genes:
-        if g not in gi:
-            gi[g] = len(genes); genes.append(g)
-    for g, ch, _ in colmeta:
-        if g not in gi:
-            gi[g] = len(genes); genes.append(g)
-    T, n = len(labels), S.shape[0]
-    sums = np.zeros((len(genes), T, n)); cnt = np.zeros((len(genes), T), dtype=np.int64)
-    for c, (g, ch, k) in enumerate(colmeta):
-        sums[gi[g], lab_ix[ch]] = S[:, c]; cnt[gi[g], lab_ix[ch]] = k
-    np.cumsum(sums, axis=1, out=sums); cc = np.cumsum(cnt, axis=1)
-    inv = np.where(cc > 0, 1.0 / (2.0 * np.maximum(cc, 1)), 0.0)
-    out = (sums * inv[:, :, None]).reshape(len(genes) * T, n).T      # n x (genes*T), gene-major
-    meta = [[g, lab, int(cc[gi[g], t])] for g in genes for t, lab in enumerate(labels)]
-    return np.ascontiguousarray(out), meta
+def ct_finish_inplace(S, colmeta, T):
+    """S is (n, G*T) gene-major with the T bins of each gene adjacent (the fixed
+    layout). Nested-threshold averages = cumsum over bins / (2 * cumulative
+    index-SNP count), 0 where the count is 0. Done IN PLACE: no second copy of
+    S. Returns colmeta with n_snps replaced by the cumulative count."""
+    n, m = S.shape; G = m // T
+    V = S.reshape(n, G, T)                       # a view, no copy
+    np.cumsum(V, axis=2, out=V)
+    cnt = np.array([k for _, _, k in colmeta], dtype=np.int64).reshape(G, T)
+    cc = np.cumsum(cnt, axis=1)
+    inv = np.where(cc > 0, 1.0 / (2.0 * np.maximum(cc, 1)), 0.0)   # (G, T)
+    V *= inv[None, :, :]
+    return [[g, c, int(cc[j // T, j % T])] for j, (g, c, _) in enumerate(colmeta)]
 
 
 def write_layout(out_dir, bed, S, colmeta):
     os.makedirs(out_dir, exist_ok=True)
     n, m = S.shape
     mm = np.memmap(os.path.join(out_dir, "scores.f32"), dtype=np.float32, mode="w+", shape=(n, m))
-    mm[:] = S; mm.flush()
+    step = max(1, (256 << 20) // (m * 4))          # ~256 MB of float32 rows at a time
+    for r0 in range(0, n, step):
+        mm[r0:r0 + step] = S[r0:r0 + step]
+    mm.flush(); del mm
     with open(os.path.join(out_dir, "samples.txt"), "w") as w:
         for f, i in zip(bed.fid, bed.iid):
             w.write(f"{f}\t{i}\n")
@@ -133,14 +139,21 @@ def main():
     a = ap.parse_args()
     t0 = time.time()
     bed = open_bed(a.bed + ".bed", num_threads=a.threads)
-    W, const, colmeta, used = load_weights(a.weights, bed)
-    S = matmul_blocks(bed, W, used, a.block, a.threads) + const[None, :]
-    print(f"matmul done ({time.time() - t0:.1f}s)", flush=True)
+    fixed = None
     if a.mode == "ct":
         thr = a.thresholds.split()
-        assert thr, "--mode ct needs --thresholds"
-        allg = [l.strip() for l in open(a.all_genes) if l.strip()] if a.all_genes else []
-        S, colmeta = ct_finish(S, colmeta, thr, allg)
+        assert thr and a.all_genes, "--mode ct needs --thresholds and --all-genes"
+        genes = []
+        for l in open(a.all_genes):
+            if l.strip() and l.strip() not in genes:
+                genes.append(l.strip())
+        fixed = [(g, f"P<={t}") for g in genes for t in thr]          # gene-major, bins adjacent
+    W, const, colmeta, used = load_weights(a.weights, bed, fixed)
+    S = matmul_blocks(bed, W, used, a.block, a.threads)
+    S += const[None, :]
+    print(f"matmul done ({time.time() - t0:.1f}s; S {S.nbytes / 2**30:.2f} GiB)", flush=True)
+    if a.mode == "ct":
+        colmeta = ct_finish_inplace(S, colmeta, len(thr))
     write_layout(a.out, bed, S, colmeta)
     print(f"sparse_score[{a.mode}]: {S.shape[0]} x {S.shape[1]} -> {a.out}  ({time.time() - t0:.1f}s)")
 
