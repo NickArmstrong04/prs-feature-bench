@@ -270,6 +270,18 @@ for tag, extra in (("7-column chunks", ["--chunk-cols", "7"]), ("one chunk", [])
     if extra:
         assert open(f"{W}/sum_v7/scores.f32", "rb").read() == open(f"{W}/sum_v5/scores.f32", "rb").read(), "v7 pwrite bytes differ from v3 memmap"
 print("20. eqtl_sparse_v5 --mode sum --write pwrite (7-column chunks: byte-identical to v3; one chunk) == brute force  OK")
+
+# ct_sparse_v4: eqtl_sparse_v3's kernel with genes position-sorted in ct mode too; column order differs from
+# v0 (allowed by the contract), values must match the ct golden exactly (compare.py matches columns by name)
+V8 = f"{B}/variants/ct_sparse_v4/sparse_score.py"
+print(run(PY + [V8, "--bed", pre, "--weights", f"{W}/ctw.tsv", "--out", f"{W}/ct_v8", "--mode", "ct",
+               "--thresholds", " ".join(thr), "--all-genes", f"{W}/genes_all.txt", "--block", "7", "--threads", "1",
+               "--chunk-cols", str(2 * len(thr))]).splitlines()[-1])
+line = run(PY + [f"{B}/compare.py", f"{W}/gold_ct", f"{W}/ct_v8"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+cols8 = {tuple(l.split("	")[1:]) for l in open(f"{W}/ct_v8/columns.tsv").read().splitlines()[1:]}
+cols0 = {tuple(l.split("	")[1:]) for l in open(f"{W}/ct_v0/columns.tsv").read().splitlines()[1:]}
+assert cols8 == cols0, "ct_sparse_v4 (gene, channel, n_snps) set differs from v0"
+print("22. ct_sparse_v4 --mode ct, genes by position (block 7, 2-gene chunks) == brute force; same (gene, channel, n_snps) set as v0  OK")
 print(run(PY + [V7, "--bed", pre, "--weights", f"{W}/ctw.tsv", "--out", f"{W}/ct_v7", "--mode", "ct", "--write", "pwrite",
                "--thresholds", " ".join(thr), "--all-genes", f"{W}/genes_all.txt", "--block", "7", "--threads", "1",
                "--chunk-cols", str(2 * len(thr))]).splitlines()[-1])

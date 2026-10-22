@@ -286,6 +286,14 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    backfill on this account.
 5. For the C+T path the same list applies to 12c, plus A1/A4 from
    `prsnet_features.md` (one LD table per chromosome; per-bin sums + counts).
+   **Kernel side, pending: `ct_sparse_v4`** = ct_sparse_v3's run.sh (12b
+   clumping unchanged) with eqtl_sparse_v3's kernel in `--mode ct`, plus genes
+   position-sorted in ct mode too (the manifest order is not positional and
+   the GEMM kernel's blocks are runs of whole genes). Smoke test 22 PASSES
+   against the ct brute force with the same (gene, channel, n_snps) set as
+   v0; column order differs, which the contract allows. Expect the kernel
+   line to fall from ~11–13 s toward 7 s; the wall stays dominated by 12b's
+   ~1,500 plink processes, which is the A1 item.
 
 ## 8. Relationship to the production tree
 
