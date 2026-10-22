@@ -216,4 +216,17 @@ import filecmp
 assert filecmp.cmp(V3, f"{B}/variants/eqtl_sparse_v1/sparse_score.py", shallow=False), "eqtl_sparse_v1/sparse_score.py differs from ct_sparse_v3's"
 print("13. eqtl_sparse_v1/sparse_score.py identical to ct_sparse_v3's  OK")
 
+# eqtl_sparse_v2's per-gene GEMM: both modes, tiny blocks so genes straddle SNP blocks, tiny chunks
+V4 = f"{B}/variants/eqtl_sparse_v2/sparse_score.py"
+print(run(PY + [V4, "--bed", pre, "--weights", wf, "--out", f"{W}/sum_v4", "--mode", "sum", "--block", "5", "--threads", "1",
+               "--chunk-cols", "7"]).splitlines()[-1])
+line = run(PY + [f"{B}/compare.py", f"{W}/gold", f"{W}/sum_v4"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+print("14. eqtl_sparse_v2 per-gene GEMM --mode sum (block 5, 7-column chunks) == eqtl brute force  OK")
+print(run(PY + [V4, "--bed", pre, "--weights", f"{W}/ctw.tsv", "--out", f"{W}/ct_v4", "--mode", "ct",
+               "--thresholds", " ".join(thr), "--all-genes", f"{W}/genes_all.txt", "--block", "7", "--threads", "1",
+               "--chunk-cols", str(2 * len(thr))]).splitlines()[-1])
+line = run(PY + [f"{B}/compare.py", f"{W}/gold_ct", f"{W}/ct_v4"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+assert open(f"{W}/ct_v4/columns.tsv").read() == open(f"{W}/ct_v0/columns.tsv").read(), "v4 columns.tsv differs from v0"
+print("15. eqtl_sparse_v2 per-gene GEMM --mode ct (block 7, 2-gene chunks) == brute force, columns.tsv == v0  OK")
+
 print("\nALL SMOKE TESTS PASSED")
