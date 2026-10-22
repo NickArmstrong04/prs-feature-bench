@@ -289,4 +289,67 @@ line = run(PY + [f"{B}/compare.py", f"{W}/gold_ct", f"{W}/ct_v7"]).splitlines()[
 assert open(f"{W}/ct_v7/columns.tsv").read() == open(f"{W}/ct_v0/columns.tsv").read(), "v7 columns.tsv differs from v0"
 print("21. eqtl_sparse_v5 --mode ct --write pwrite (block 7, 2-gene chunks) == brute force, columns.tsv == v0  OK")
 
+# ---- dosage layout (PRSNet-2 features): dosage_v0 vs brute force, the --recode A converter, compare_dosage.py
+import pickle
+FX = f"{W}/fixdos"; os.makedirs(f"{FX}/genes", exist_ok=True)
+with open(f"{FX}/gene_manifest.tsv", "w") as man:
+    man.write("gene\tchr\tstart\tend\tn_snps\tbig\n")
+    for g, js in gene_snps.items():
+        man.write(f"{g}\t19\t0\t0\t{len(js)}\t0\n")
+        open(f"{FX}/genes/{g}.snplist", "w").write("".join(sid[j] + "\n" for j in js))
+    man.write("CG_EMPTY\t19\t0\t0\t0\t0\n")
+pthr = 0.05
+print(run(PY + [f"{B}/variants/dosage_v0/dosage.py", "--bed", pre, "--pvalue", f"{W}/SNP.pvalue", "--genes-dir", f"{FX}/genes",
+               "--manifest", f"{FX}/gene_manifest.tsv", "--out", f"{W}/dos_v0", "--pthr", str(pthr), "--block", "7"]).splitlines()[-1])
+sel = sorted({j for js in gene_snps.values() for j in js if p_all[j] < pthr})
+Xref = G[:, sel].copy(); Xref[np.isnan(Xref)] = 3; Xref = Xref.astype(np.int8)          # a1 copies, 3 = missing
+X0 = np.load(f"{W}/dos_v0/X.npy"); assert X0.dtype == np.int8 and X0.shape == (ns, len(sel)) and np.array_equal(X0, Xref)
+assert [l.split("\t")[1] for l in open(f"{W}/dos_v0/snps.tsv").read().splitlines()[1:]] == [sid[j] for j in sel]
+g2 = pickle.load(open(f"{W}/dos_v0/gene2snps.pkl", "rb"))
+g2_ref = {g: [sel.index(j) for j in sorted(js) if p_all[j] < pthr] for g, js in gene_snps.items()}
+assert g2 == {g: v for g, v in g2_ref.items() if v}, "gene2snps"
+assert np.array_equal(np.load(f"{W}/dos_v0/pvalues.npy"), p_all[sel])
+print(f"23. dosage_v0 (block 7): X int8 == bed (a1 copies, 3 = missing), {len(sel)} SNPs, gene2snps, pvalues  OK")
+
+# reference path: a plink --recode A file written from the same genotypes, converted by lib/dosage_from_raw.py
+with open(f"{W}/fake.raw", "w") as raw, open(f"{W}/pairs.tsv", "w") as pairs:
+    raw.write("FID IID PAT MAT SEX PHENOTYPE " + " ".join(f"{sid[j]}_{a1[j]}" for j in sel) + "\n")
+    for i in range(ns):
+        raw.write(f"F{i} I{i} 0 0 0 -9 " + " ".join("NA" if np.isnan(G[i, j]) else str(int(G[i, j])) for j in sel) + "\n")
+    for g, js in gene_snps.items():
+        for j in js:
+            if p_all[j] < pthr:
+                pairs.write(f"{g}\t{sid[j]}\n")
+print(run(PY + [f"{B}/lib/dosage_from_raw.py", "--raw", f"{W}/fake.raw", "--bim", pre + ".bim", "--pvalue", f"{W}/SNP.pvalue",
+               "--pairs", f"{W}/pairs.tsv", "--out", f"{W}/dos_ref"]).strip())
+assert np.array_equal(np.load(f"{W}/dos_ref/X.npy"), Xref)
+line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_ref", f"{W}/dos_v0"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+# shuffled rows and columns still PASS; one cell, a dropped gene SNP, a flipped allele label FAIL
+def write_dos(d, X, rows, cols, a1_override=None, g2tsv=None):
+    os.makedirs(d, exist_ok=True)
+    np.save(f"{d}/X.npy", np.ascontiguousarray(X[rows][:, cols]))
+    open(f"{d}/samples.txt", "w").write("".join(f"F{i}\tI{i}\n" for i in rows))
+    with open(f"{d}/snps.tsv", "w") as w:
+        w.write("col\tsnp\ta1\tbp\tp\n")
+        for c, j in enumerate(cols):
+            w.write(f"{c}\t{sid[sel[j]]}\t{(a1_override or a1)[sel[j]]}\t0\t{p_all[sel[j]]!r}\n")
+    np.save(f"{d}/pvalues.npy", p_all[np.asarray(sel)[cols]])
+    open(f"{d}/gene2snps.tsv", "w").write(g2tsv or open(f"{W}/dos_v0/gene2snps.tsv").read())
+    open(f"{d}/gene2snps.pkl", "wb").write(b"")
+pr, pc = rng.permutation(ns), rng.permutation(len(sel))
+write_dos(f"{W}/dos_shuf", Xref, pr, pc)
+line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_v0", f"{W}/dos_shuf"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line, "(shuffled rows+cols)")
+Xbad = Xref.copy(); Xbad[3, 2] = (Xbad[3, 2] + 1) % 3
+write_dos(f"{W}/dos_bad", Xbad, np.arange(ns), np.arange(len(sel)))
+line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_v0", f"{W}/dos_bad"], ok=2).splitlines()[-1]; assert "1 bad snps, 1 bad cells" in line, line; print(line, "(one corrupted cell)")
+g2txt = open(f"{W}/dos_v0/gene2snps.tsv").read().splitlines()
+gl = g2txt[1].split("\t"); gl[2] = ",".join(gl[2].split(",")[1:] or ["x"]); g2txt[1] = "\t".join(gl)
+write_dos(f"{W}/dos_badg", Xref, np.arange(ns), np.arange(len(sel)), g2tsv="\n".join(g2txt) + "\n")
+line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_v0", f"{W}/dos_badg"], ok=2).splitlines()[-1]; assert "1 bad genes" in line, line; print(line, "(one gene's SNP set changed)")
+a1_flip = list(a1); a1_flip[sel[0]] = a2[sel[0]]
+write_dos(f"{W}/dos_bada1", Xref, np.arange(ns), np.arange(len(sel)), a1_override=a1_flip)
+r = subprocess.run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_v0", f"{W}/dos_bada1"], capture_output=True, text=True)
+assert r.returncode == 2 and "ALLELE: 1 SNPs" in r.stdout, r.stdout; print(r.stdout.splitlines()[-1], "(one allele label flipped)")
+print("24. dosage_from_raw == dosage_v0; compare_dosage PASS/FAIL behaviour  OK")
+
 print("\nALL SMOKE TESTS PASSED")

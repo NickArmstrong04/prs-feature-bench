@@ -25,6 +25,9 @@
 #      scores.f32      float32, C order, shape (n_samples, n_columns)
 #  It gets BENCH_THREADS, BENCH_LIB (lib/) and BENCH_PY (python) in the
 #  environment and should use them. It must not write outside <out_dir>.
+#  Second layout (PRSNet-2 dosage features, README s2/s9): samples.txt,
+#  snps.tsv, X.npy (int8, 3 = missing), pvalues.npy, gene2snps.{tsv,pkl};
+#  detected by X.npy and compared exactly with compare_dosage.py.
 #
 #  Fidelity rule: a variant PASSES when, on every (gene, channel) column
 #  present in the golden, |ours - golden| <= ATOL + RTOL*|golden| for every
@@ -81,11 +84,20 @@ if (( RC != 0 )); then
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$STAMP" "$VAR" "$COMMIT$DIRTY" "$THREADS" "$WALL" "$CPU_S" "$MAXRSS_MB" "RUNFAIL" "-" "$TAG" >> "$BENCH/results.tsv"
     exit "$RC"
 fi
-for f in samples.txt columns.tsv scores.f32; do
-    [[ -s "$OUT/$f" ]] || { echo "CONTRACT: $OUT/$f missing or empty"; exit 2; }
+# two layouts (README s2): scores (scores.f32, compared with tolerance) or
+# dosage (X.npy int8 + sidecars, compared exactly); told apart by X.npy
+if [[ -f "$OUT/X.npy" ]]; then
+    LAYOUT=dosage; FILES="samples.txt snps.tsv X.npy pvalues.npy gene2snps.tsv gene2snps.pkl"
+    CMP=compare_dosage.py; CMP_ARGS=(); BULK=X.npy; COLF=snps.tsv
+else
+    LAYOUT=scores; FILES="samples.txt columns.tsv scores.f32"
+    CMP=compare.py; CMP_ARGS=(--rtol "${BENCH_RTOL:-1e-5}" --atol "${BENCH_ATOL:-1e-7}"); BULK=scores.f32; COLF=columns.tsv
+fi
+for f in $FILES; do
+    [[ -s "$OUT/$f" ]] || { echo "CONTRACT ($LAYOUT layout): $OUT/$f missing or empty"; exit 2; }
 done
-NCOL=$(awk 'NR>1' "$OUT/columns.tsv" | wc -l)
-echo "done:     wall $WALL   cpu ${CPU_S}s   maxrss ${MAXRSS_MB} MB   columns $NCOL"
+NCOL=$(awk 'NR>1' "$OUT/$COLF" | wc -l)
+echo "done:     wall $WALL   cpu ${CPU_S}s   maxrss ${MAXRSS_MB} MB   columns $NCOL   ($LAYOUT layout)"
 
 # --- compare
 VERDICT=NOGOLDEN; DETAIL="-"
@@ -93,7 +105,7 @@ if [[ -n "$AS_GOLDEN" && $GOLDEN_SET -eq 0 ]]; then
     echo "making golden/$AS_GOLDEN -- no comparison (pass --golden <name> to compare as well)"
 elif [[ -d "$GOLD/$GOLDEN" ]]; then
     set +e
-    "$BENCH_PY" "$BENCH/compare.py" "$GOLD/$GOLDEN" "$OUT" --rtol "${BENCH_RTOL:-1e-5}" --atol "${BENCH_ATOL:-1e-7}" | tee "$OUT/compare.txt"
+    "$BENCH_PY" "$BENCH/$CMP" "$GOLD/$GOLDEN" "$OUT" "${CMP_ARGS[@]}" | tee "$OUT/compare.txt"
     CRC=${PIPESTATUS[0]}
     set -e
     VERDICT=$([[ $CRC -eq 0 ]] && echo PASS || echo FAIL)
@@ -110,13 +122,13 @@ echo "results:  $VERDICT  -> results.tsv"
 if [[ -n "$AS_GOLDEN" ]]; then
     [[ -d "$GOLD/$AS_GOLDEN" ]] && { echo "$GOLD/$AS_GOLDEN exists -- remove it by hand if you really mean to replace it"; exit 3; }
     mkdir -p "$GOLD/$AS_GOLDEN"
-    cp "$OUT"/{samples.txt,columns.tsv,scores.f32,run.log} "$GOLD/$AS_GOLDEN/"
+    for f in $FILES run.log; do cp "$OUT/$f" "$GOLD/$AS_GOLDEN/"; done
     printf 'variant\t%s\ncommit\t%s\nstamp\t%s\nthreads\t%s\nwall\t%s\nfixture\t%s\n' "$VAR" "$COMMIT$DIRTY" "$STAMP" "$THREADS" "$WALL" "$FIX" > "$GOLD/$AS_GOLDEN/provenance.tsv"
     echo "stored:   $GOLD/$AS_GOLDEN  (from $VAR @ $COMMIT$DIRTY)"
 fi
 
 # --- clean up bulky run output unless asked to keep it
 if (( KEEP == 0 )) && [[ "$VERDICT" == PASS ]]; then
-    rm -f "$OUT/scores.f32"; rm -rf "$OUT/work"
-    echo "          (scores.f32 and work/ removed; --keep to retain)"
+    rm -f "$OUT/$BULK"; rm -rf "$OUT/work"
+    echo "          ($BULK and work/ removed; --keep to retain)"
 fi

@@ -24,21 +24,26 @@ prs-feature-bench/
 ├── CLAUDE.md               rules for the Claude Code session that works here
 ├── make_fixture.sh         ONE-TIME, on Bouchet: builds fixture/ from ad/eur chr19
 ├── run_variant.sh          runs variants/<v>, times it, compares, logs a row
-├── compare.py              fidelity check: golden vs candidate, standard layout
+├── compare.py              fidelity check: golden vs candidate, scores layout
+├── compare_dosage.py       exact check for the dosage layout (PRSNet-2 features, §9)
 ├── results.tsv             append-only log (created by the first run)
 ├── fixture/                the data (not in git; ~200 MB)
 ├── golden/<name>/          reference outputs (not in git)
 ├── runs/<variant>_<stamp>/ per-run output + run.log + compare.txt
 ├── lib/
 │   ├── ref_12_prsnet.py    pinned copy of the production scorer (from make_fixture)
-│   └── from_chunks.py      12c chunk layout -> standard layout
+│   ├── from_chunks.py      12c chunk layout -> standard layout
+│   ├── make_ct_weights.py  clumps -> long weights (ct variants)
+│   └── dosage_from_raw.py  plink --recode A -> dosage layout (ref_dosage)
 ├── eqtl/
 │   └── weights_to_plink2.py  long-format weights -> plink2 wide score file
 ├── tests/smoke_test.py     synthetic end-to-end test of the Python pieces
 └── variants/
     ├── ref_ct/             reference: production 12b + 12c   -> golden/ct
     ├── ref_eqtl_plink2/    oracle: plink2 multi-column --score -> golden/eqtl_<set>
-    └── eqtl_sparse_v0/     first fast eQTL implementation (bed-reader + scipy)
+    ├── eqtl_sparse_v0/     first fast eQTL implementation (bed-reader + scipy)
+    ├── ref_dosage/         reference: plink --recode A -> golden/dosage (PRSNet-2 features, §9)
+    └── dosage_v0/          first fast PRSNet-2 dosage implementation (packed-bed decode)
 ```
 
 `.gitignore` should hold `fixture/ golden/ runs/ lib/ref_12_prsnet.py`.
@@ -62,6 +67,23 @@ PASS unless `--keep`). The variant receives `BENCH_THREADS`, `BENCH_LIB` and
 every sample: `|cand − gold| ≤ atol + rtol·|gold|`, rtol 1e-5, atol 1e-7
 (the production `check` tolerance). Missing columns fail; extra columns are
 reported but not compared. Rows and columns may be in any order.
+
+**Second layout: dosage (PRSNet-2 features, §9).** A variant may instead leave
+these files; `run_variant.sh` tells the layouts apart by the presence of
+`X.npy` and compares with `compare_dosage.py`, exactly (no tolerance):
+
+| file | content |
+|---|---|
+| `samples.txt` | `FID<TAB>IID`, row order of `X.npy` |
+| `snps.tsv` | header `col snp a1 bp p`; one row per column; `a1` = the counted allele |
+| `X.npy` | int8, shape (n_samples, n_snps): copies of `a1`, 0/1/2, **3 = missing** |
+| `pvalues.npy` | float64 (n_snps,): GWAS P per column |
+| `gene2snps.tsv` | header `gene n_snps snps`; `snps` = comma-separated snp ids |
+| `gene2snps.pkl` | dict gene → list of column indices (what the PRSNet-2 loader reads) |
+
+PASS: every golden sample and SNP present, same `a1`, every cell of `X`
+equal, same P, and the same SNP set for every golden gene. Rows and columns
+may be in any order; a golden and a candidate must share a layout.
 
 ## 3. First run on Bouchet (in a small `salloc`, e.g. 2 CPU / 8 GB)
 
@@ -292,8 +314,11 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    the GEMM kernel's blocks are runs of whole genes). Smoke test 22 PASSES
    against the ct brute force with the same (gene, channel, n_snps) set as
    v0; column order differs, which the contract allows. Expect the kernel
-   line to fall from ~11�13 s toward 7 s; the wall stays dominated by 12b's
+   line to fall from ~11–13 s toward 7 s; the wall stays dominated by 12b's
    ~1,500 plink processes, which is the A1 item.
+   **A1 shelved (2026-10-22):** the target model turned out to be PRSNet-2,
+   whose inputs need no clumping at all (§9). The C+T path stays as is unless
+   the original PRSNet is wanted too.
 
 ## 8. Relationship to the production tree
 
@@ -302,3 +327,45 @@ Production: `$ROOT/scripts/slurm/12_prsnet.{sh,py}` and `submit_12b_split.sh`
 bench never writes there. A variant that wins here is ported back as a new
 step (`12e`, say), run on one chromosome, and gated by `12_prsnet.sh check` or
 its eQTL equivalent before it touches the multi-disease plan.
+
+## 9. PRSNet-2 dosage features
+
+PRSNet-2 (Li, Shan, …, Zhang; bioRxiv 10.1101/2025.11.22.689899, Nov 2025;
+code `github.com/lihan97/PRSNet-2`) replaces the original PRSNet's per-gene
+C+T PRS with a learned multi-kernel aggregator over raw genotypes. What the
+paper and the released example data (`example_data/AD`) fix as the input:
+
+- SNPs with GWAS **P < 0.01** (default; "Only SNPs with a P-value below this
+  threshold are retained"), **no clumping**.
+- A SNP is linked to a gene "if the SNP falls within the gene body extended by
+  **10 kb** both upstream and downstream" (18,963 protein-coding genes); one SNP
+  may link to several genes.
+- `X.npy` int8 (n_samples × n_snps) with values 0/1/2 and **3 = missing**
+  (`src/dataset.py` does `X[X==3] = 0`); `pvalues.npy` float64; `gene2snps.pkl`
+  dict gene → SNP column indices. `scripts/train.py` loads `X.npy` whole.
+- The preprocessing notebook the README names (`scripts/get_data.ipynb`) is not
+  in the repository, so the exact gene annotation and missing-call handling
+  upstream of `X.npy` are unpublished.
+
+Bench decisions (recorded here because they are not derivable from the code):
+the counted allele is the fixture's `.bim` A1 = GWAS effect allele (plink
+`--recode A` counts the same allele, so a positive beta means risk-increasing
+dosage); missing stays 3, as the released loader expects; a gene's window is
+the fixture's `genes/<gene>.snplist`, i.e. production 12a's window, not the
+paper's ±10 kb — change `PRSNET_WINDOWS` upstream if the paper's rule is
+wanted; SNPs significant but in no gene window are dropped (the model only
+ever gathers SNPs through `gene2snps`). Columns are in `.bim` order, so each
+gene's SNPs are a near-contiguous run.
+
+What carries over from §7: the packed-bed LUT decode (now straight to the
+output dtype, no float, no GEMM, no imputation), position-ordered span reads,
+and the memmapped transposed write. At 20k × M the whole thing is one pass;
+at UKB scale (411k × ~500k ≈ 200 GB int8) the production port needs
+per-chromosome shards and a loader that does not `np.load` the matrix whole.
+
+Variants: `ref_dosage` (awk selection + plink 1.9 `--recode A` +
+`lib/dosage_from_raw.py`; makes `golden/dosage`) and `dosage_v0`
+(`variants/dosage_v0/dosage.py`, one Python pass). Knobs: `PTHR` (default
+0.01), `BLOCK` (selected SNPs per decode block, 4000). Smoke tests 23–24
+cover both against a brute-force `bed-reader` read and `compare_dosage.py`'s
+PASS/FAIL behaviour. Bouchet runs pending.
