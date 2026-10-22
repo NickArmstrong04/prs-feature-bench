@@ -260,4 +260,21 @@ line = run(PY + [f"{B}/compare.py", f"{W}/gold_ct", f"{W}/ct_v6"]).splitlines()[
 assert open(f"{W}/ct_v6/columns.tsv").read() == open(f"{W}/ct_v0/columns.tsv").read(), "v6 columns.tsv differs from v0"
 print("19. eqtl_sparse_v4 --mode ct (block 7, 2-gene chunks) == brute force, columns.tsv == v0  OK")
 
+# eqtl_sparse_v5: v3's kernel, scores.f32 written with pwrite (per-row segments with column chunks,
+# whole rows with one chunk); must be byte-identical to v3's memmap output. Also ct mode.
+V7 = f"{B}/variants/eqtl_sparse_v5/sparse_score.py"
+for tag, extra in (("7-column chunks", ["--chunk-cols", "7"]), ("one chunk", [])):
+    print(run(PY + [V7, "--bed", pre, "--weights", f"{W}/w_shuf.tsv", "--out", f"{W}/sum_v7", "--mode", "sum", "--block", "5", "--threads", "1",
+                   "--write", "pwrite"] + extra).splitlines()[-1])
+    line = run(PY + [f"{B}/compare.py", f"{W}/gold", f"{W}/sum_v7"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+    if extra:
+        assert open(f"{W}/sum_v7/scores.f32", "rb").read() == open(f"{W}/sum_v5/scores.f32", "rb").read(), "v7 pwrite bytes differ from v3 memmap"
+print("20. eqtl_sparse_v5 --mode sum --write pwrite (7-column chunks: byte-identical to v3; one chunk) == brute force  OK")
+print(run(PY + [V7, "--bed", pre, "--weights", f"{W}/ctw.tsv", "--out", f"{W}/ct_v7", "--mode", "ct", "--write", "pwrite",
+               "--thresholds", " ".join(thr), "--all-genes", f"{W}/genes_all.txt", "--block", "7", "--threads", "1",
+               "--chunk-cols", str(2 * len(thr))]).splitlines()[-1])
+line = run(PY + [f"{B}/compare.py", f"{W}/gold_ct", f"{W}/ct_v7"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+assert open(f"{W}/ct_v7/columns.tsv").read() == open(f"{W}/ct_v0/columns.tsv").read(), "v7 columns.tsv differs from v0"
+print("21. eqtl_sparse_v5 --mode ct --write pwrite (block 7, 2-gene chunks) == brute force, columns.tsv == v0  OK")
+
 print("\nALL SMOKE TESTS PASSED")
