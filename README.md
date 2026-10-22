@@ -187,6 +187,21 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    it is a fixture-scale tool only, and the production-scale gate for the eQTL
    step needs a different reference (a validated sparse implementation, or
    plink2 on a column subset) — a design decision to record in `claude/`.
+   **Follow-up done: `eqtl_sparse_v2` = one GEMM per gene** (fixture_20k,
+   2 threads; rows `20261022_133027`, `20261022_133033` vs v1 rows
+   `20261022_131041`, `20261022_132450`). PASS at the same max|diff| as v1.
+   `synth14`: 10.82 s / 3020 MB vs 19.54 s / 2519 MB (−45% wall); kernel
+   10.6 s vs 19.3 s, split read 2.4, decode+impute 3.4, gemm 1.0, write 1.6 s
+   — the 7.9 s scatter became a 1.0 s GEMM as expected. `synth`: 3.56 s vs
+   3.49 s, even (the 3-channel case was never scatter-bound). The higher RSS
+   is the chunk budget, not the kernel: v1 counted the matmul temporary and
+   so ran 0.5 GiB chunk blocks at `--chunk-gb 1.0`; v2 has no temporary and
+   runs the full 1.0 GiB block (4 chunks of ≤ 6710 cols vs v1's 7 of 3355).
+   Equal-memory comparison is `CHUNK_GB=0.5`, pending. Remaining kernel
+   time is read 2.4 + decode+impute 3.4 + write 1.6 of 10.6 s: the per-gene
+   int8→float64 cast plus the block LUT decode is now the largest item, then
+   the span over-read (reading the row span of a SNP block is ~3× the used
+   bytes) and the transposed memmap write.
 3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are
