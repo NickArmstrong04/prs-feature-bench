@@ -211,4 +211,9 @@ print(run(PY + [V3, "--bed", pre, "--weights", wf, "--out", f"{W}/sum_v3", "--mo
 line = run(PY + [f"{B}/compare.py", f"{W}/gold", f"{W}/sum_v3"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
 print("12. ct_sparse_v3 scatter kernel --mode sum (1-column chunks) == eqtl brute force  OK")
 
+# eqtl_sparse_v1 is the v3 kernel in --mode sum: its copy must not drift
+import filecmp
+assert filecmp.cmp(V3, f"{B}/variants/eqtl_sparse_v1/sparse_score.py", shallow=False), "eqtl_sparse_v1/sparse_score.py differs from ct_sparse_v3's"
+print("13. eqtl_sparse_v1/sparse_score.py identical to ct_sparse_v3's  OK")
+
 print("\nALL SMOKE TESTS PASSED")
