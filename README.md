@@ -243,11 +243,17 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    0.2 s; with 4 column chunks each row is written as four 27 KB segments and
    the memmap's page-fault/dirtying cost does not go away. synth (1 chunk,
    full rows): write 0.3 → 0.2 s, gemm 0.4 → 0.9 s. v3 stays the best.
-   **Next: `eqtl_sparse_v5`** — v3's GEMM orientation into a cache-resident
-   (C_g × n) tile buffer, then the tile transposed into S[:, a:b] while hot
-   (a 2.2 MB strided store per gene instead of a 1 GiB transpose per chunk),
-   and the write path selectable with `WRITE=mmap|pwrite` to separate the
-   memmap's cost from the layout's. Bouchet run pending.
+   The per-gene tile transpose (GEMM into a (C_g × n) buffer, then
+   `S[:, a:b] = tile.T` while hot) was benchmarked locally at 0.15 s per
+   chunk — about what the transposed write costs on Bouchet beyond v4's
+   contiguous one — so it was not made a variant.
+   **Next: `eqtl_sparse_v5`** — v3's kernel unchanged; `scores.f32` written
+   with `os.pwrite` (one call per row segment, one per 256 MB step when a
+   chunk spans all columns) instead of through the numpy memmap, selectable
+   with `WRITE=pwrite|mmap`; and the setup phases (weights parse, permute,
+   plan) plus the kernel's untimed remainder logged, to attribute the 2.1 s
+   outside the timed parts. Byte-identical output to v3 on the smoke data.
+   Bouchet run pending.
 3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are
