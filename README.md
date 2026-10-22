@@ -164,6 +164,15 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    (the block cast plus scipy's `(c, n)` temporary) is 9.3 s of 16.6 and is the
    next target. Peak RSS 3700 MB vs 2667 MB: the `.bed` memmap's file-backed
    pages count toward RSS; read the block's row span with `np.fromfile` instead.
+   **Follow-up done: `ct_sparse_v3`** (rows `20261021_184355`, `20261022_130215`
+   vs v2 row `20261021_183438`, same chunking) — the float64 block + scipy
+   product replaced by a per-SNP axpy into the transposed chunk result, and the
+   `.bed` read with `np.fromfile`. PASS, bit-identical. Kernel 12.9 s / 10.7 s
+   vs 16.6 s (split: read 0.3, decode+impute 3.1, scatter 2.1, write 2.7 — the
+   write is now a transposed copy); peak RSS 1952 MB vs 3700 MB. The two v3
+   runs were on different nodes; ~2 s is the kernel noise floor. The inner
+   loop is Python per nonzero weight, so the many-columns-per-SNP eQTL case
+   must be measured before this kernel is adopted for `--mode sum`.
 3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are
