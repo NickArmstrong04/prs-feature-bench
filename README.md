@@ -226,6 +226,13 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    (weights parsing of 637k rows in Python, setup), and does not scale with
    n; the parts that do are decode+impute 2.1, write 1.6 (the transposed
    copy of the (c × n) chunk result into the (n × m) memmap), gemm 1.0.
+   **Next: `eqtl_sparse_v4`** — sample-major chunk result. The transposed
+   S^T layout came from ct_sparse_v3's axpy loop and the GEMM does not need
+   it: `np.matmul(G_g.T, W_g, out=S[:, a:b])` writes the column slice through
+   BLAS at the same speed as the contiguous form (local 1 GiB chunk: 0.117 s
+   vs 0.121 s), and the memmap write becomes a row-contiguous float64→float32
+   copy (0.09 s vs 0.86 s per chunk locally). Bit-identical to v3 on the smoke
+   data; expect write 1.6 → ~0.2 s on synth14. Bouchet run pending.
 3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are

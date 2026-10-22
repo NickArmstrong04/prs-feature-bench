@@ -246,4 +246,18 @@ line = run(PY + [f"{B}/compare.py", f"{W}/gold_ct", f"{W}/ct_v5"]).splitlines()[
 assert open(f"{W}/ct_v5/columns.tsv").read() == open(f"{W}/ct_v0/columns.tsv").read(), "v5 columns.tsv differs from v0"
 print("17. eqtl_sparse_v3 --mode ct (block 7, 2-gene chunks) == brute force, columns.tsv == v0  OK")
 
+# eqtl_sparse_v4: v3 with the sample-major chunk result (GEMM into S[:, cols], contiguous write), both modes
+V6 = f"{B}/variants/eqtl_sparse_v4/sparse_score.py"
+print(run(PY + [V6, "--bed", pre, "--weights", f"{W}/w_shuf.tsv", "--out", f"{W}/sum_v6", "--mode", "sum", "--block", "5", "--threads", "1",
+               "--chunk-cols", "7"]).splitlines()[-1])
+line = run(PY + [f"{B}/compare.py", f"{W}/gold", f"{W}/sum_v6"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+line = run(PY + [f"{B}/compare.py", f"{W}/sum_v5", f"{W}/sum_v6", "--rtol", "0", "--atol", "0"]).splitlines()[-1]; assert line.startswith("PASS"), line
+print("18. eqtl_sparse_v4 --mode sum (shuffled weights, block 5, 7-column chunks) == brute force, bit-identical to v3  OK")
+print(run(PY + [V6, "--bed", pre, "--weights", f"{W}/ctw.tsv", "--out", f"{W}/ct_v6", "--mode", "ct",
+               "--thresholds", " ".join(thr), "--all-genes", f"{W}/genes_all.txt", "--block", "7", "--threads", "1",
+               "--chunk-cols", str(2 * len(thr))]).splitlines()[-1])
+line = run(PY + [f"{B}/compare.py", f"{W}/gold_ct", f"{W}/ct_v6"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+assert open(f"{W}/ct_v6/columns.tsv").read() == open(f"{W}/ct_v0/columns.tsv").read(), "v6 columns.tsv differs from v0"
+print("19. eqtl_sparse_v4 --mode ct (block 7, 2-gene chunks) == brute force, columns.tsv == v0  OK")
+
 print("\nALL SMOKE TESTS PASSED")
