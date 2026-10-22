@@ -253,7 +253,22 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    with `WRITE=pwrite|mmap`; and the setup phases (weights parse, permute,
    plan) plus the kernel's untimed remainder logged, to attribute the 2.1 s
    outside the timed parts. Byte-identical output to v3 on the smoke data.
-   Bouchet run pending.
+   **Tried, much slower: `eqtl_sparse_v5 WRITE=pwrite`** (row `20261022_140304`
+   vs the same commit with `WRITE=mmap`, row `20261022_140359`). PASS, but
+   write 19.1 s vs 2.0 s on synth14: with 4 column chunks the pwrite path
+   issues 80k 27 KB partial-row writes, and on the cluster filesystem each is
+   a round trip; with one chunk (synth, whole rows) it is 0.3 s, same as the
+   memmap. The memmap stays. The setup line answers the other question:
+   weights parsing is 1.2 s of the 2.1 s (637k rows in Python), "other"
+   (csc slicing, const add, chunk loop) 0.8–1.2 s. Neither scales with n.
+   **Where the eQTL path stands (fixture_20k, 2 threads):** `eqtl_sparse_v3`
+   7.40 s / 2797 MB on synth14 vs `ref_eqtl_plink2` 12:11.93 / 31.5 GB (row
+   `20261022_131138`) and `eqtl_sparse_v0` 27.25 s / 5217 MB; synth 2.55 s vs
+   5.59 s. Of the remaining 7.1 s kernel, the parts that scale with n are
+   decode+impute 2.1 (float64 tile per gene, bandwidth-bound), write 1.6–2.0
+   (memmap transpose) and gemm 1.0; the rest is fixed cost. This is the
+   kernel to port to production (`12e`); further gains need a compiled
+   decode+GEMM, not more numpy.
 3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are
