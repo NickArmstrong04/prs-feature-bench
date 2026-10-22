@@ -213,8 +213,19 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    in place with `np.copyto(where=)`; genes ordered by first SNP row so a
    block's row span stays tight for any weights-file order. Bit-identical to
    v2 on the smoke data; the local block benchmark went 0.40 s → 0.25 s for
-   decode+impute+gemm, so expect ~1.5 s off the synth14 kernel. Bouchet run
-   pending.
+   decode+impute+gemm, so expect ~1.5 s off the synth14 kernel.
+   **Done: `eqtl_sparse_v3`** (rows `20261022_134816`, `20261022_134821` vs
+   v2 rows `20261022_133027`, `20261022_133033`, same chunking). PASS at the
+   same max|diff|. `synth14`: 7.40 s / 2797 MB vs 10.82 s / 3020 MB (−32%);
+   kernel 7.1 s vs 10.6 s, split read 0.3, decode+impute 2.1, gemm 1.0, write
+   1.6 s. `synth`: 2.55 s / 1201 MB vs 3.56 s / 1588 MB. decode+impute fell
+   3.4 → 2.1 s as predicted, but the larger win was unplanned: read fell
+   2.4 → 0.3 s, so v2's genes (weights-file order) were not in .bim order and
+   each block's row span over-read heavily; ordering genes by first SNP row
+   fixed it. Of the 7.1 s kernel, 2.1 s is now outside the timed parts
+   (weights parsing of 637k rows in Python, setup), and does not scale with
+   n; the parts that do are decode+impute 2.1, write 1.6 (the transposed
+   copy of the (c × n) chunk result into the (n × m) memmap), gemm 1.0.
 3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are
