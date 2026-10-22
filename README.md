@@ -232,7 +232,22 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    BLAS at the same speed as the contiguous form (local 1 GiB chunk: 0.117 s
    vs 0.121 s), and the memmap write becomes a row-contiguous float64→float32
    copy (0.09 s vs 0.86 s per chunk locally). Bit-identical to v3 on the smoke
-   data; expect write 1.6 → ~0.2 s on synth14. Bouchet run pending.
+   data; expect write 1.6 → ~0.2 s on synth14.
+   **Tried, slower: `eqtl_sparse_v4`** (rows `20261022_135350` 2 threads,
+   `20261022_135428` 1 thread vs v3 row `20261022_134821`). PASS, but synth14
+   8.08 s vs 7.40 s. Two things the local benchmark got wrong on Bouchet's
+   BLAS: the `G_g^T @ W_g` orientation (M = n tall, K = 30, N = 14, strided C)
+   runs at half the speed of v3's `W_g^T @ G_g` (gemm 2.2 s vs 1.0 s at 2
+   threads, 4.1 s at 1 thread — so this shape does use threads while v3's did
+   not), and the row-contiguous memmap write only fell 1.6 → 1.1 s, not to
+   0.2 s; with 4 column chunks each row is written as four 27 KB segments and
+   the memmap's page-fault/dirtying cost does not go away. synth (1 chunk,
+   full rows): write 0.3 → 0.2 s, gemm 0.4 → 0.9 s. v3 stays the best.
+   **Next: `eqtl_sparse_v5`** — v3's GEMM orientation into a cache-resident
+   (C_g × n) tile buffer, then the tile transposed into S[:, a:b] while hot
+   (a 2.2 MB strided store per gene instead of a 1 GiB transpose per chunk),
+   and the write path selectable with `WRITE=mmap|pwrite` to separate the
+   memmap's cost from the layout's. Bouchet run pending.
 3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are
