@@ -197,11 +197,24 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    is the chunk budget, not the kernel: v1 counted the matmul temporary and
    so ran 0.5 GiB chunk blocks at `--chunk-gb 1.0`; v2 has no temporary and
    runs the full 1.0 GiB block (4 chunks of ≤ 6710 cols vs v1's 7 of 3355).
-   Equal-memory comparison is `CHUNK_GB=0.5`, pending. Remaining kernel
-   time is read 2.4 + decode+impute 3.4 + write 1.6 of 10.6 s: the per-gene
-   int8→float64 cast plus the block LUT decode is now the largest item, then
-   the span over-read (reading the row span of a SNP block is ~3× the used
-   bytes) and the transposed memmap write.
+   Equal-memory comparison (row `20261022_133422`, `CHUNK_GB=0.5`, 7 chunks
+   like v1): 11.51 s / 2703 MB vs v1's 19.54 s / 2519 MB — the +180 MB is the
+   int8 block and its missing mask. Threads do nothing (row `20261022_133504`,
+   4 threads: 10.97 s, gemm still 1.0 s): the per-gene tiles are too small
+   for BLAS threading, so the kernel is one core's worth of decode, read and
+   write. Remaining split read 2.4 + decode+impute 3.4 + gemm 1.0 + write 1.6
+   of 10.6 s. A local micro-benchmark of one 4000-SNP block at n = 20k found
+   the per-gene `astype(float64)` dominated by the fresh 4.8 MB allocation it
+   makes each call (0.13 s vs 0.04 s cast into a reused buffer), and the three
+   int8 passes for sums and the missing mask cost more than the same statistics
+   from the packed bytes via 256-entry tables.
+   **Next: `eqtl_sparse_v3`** — no int8 block; per-SNP means from byte
+   tables; each gene decoded and cast into two preallocated buffers, imputed
+   in place with `np.copyto(where=)`; genes ordered by first SNP row so a
+   block's row span stays tight for any weights-file order. Bit-identical to
+   v2 on the smoke data; the local block benchmark went 0.40 s → 0.25 s for
+   decode+impute+gemm, so expect ~1.5 s off the synth14 kernel. Bouchet run
+   pending.
 3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are
