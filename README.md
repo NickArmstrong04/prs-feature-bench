@@ -173,6 +173,20 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    runs were on different nodes; ~2 s is the kernel noise floor. The inner
    loop is Python per nonzero weight, so the many-columns-per-SNP eQTL case
    must be measured before this kernel is adopted for `--mode sum`.
+   **eQTL path, `eqtl_sparse_v1` = the v3 kernel in `--mode sum`** (fixture_20k,
+   2 threads; rows `20261022_131041` and `20261022_132450` vs `eqtl_sparse_v0`
+   rows `20261022_131033`, `20261022_132352`; goldens `fixture_20k/golden/eqtl_synth`
+   and `eqtl_synth14` from `ref_eqtl_plink2`). PASS at the same max|diff| as v0.
+   `synth` (3 ch × 10 SNPs, 4,575 cols): 3.49 s / 1214 MB vs 5.59 s / 1969 MB.
+   `synth14` (14 ch × 30 SNPs, 21,350 cols, 637k nnz): 19.54 s / 2519 MB vs
+   27.25 s / 5217 MB; kernel split read 1.9, decode+impute 2.6, scatter 7.9,
+   write 3.7 s. The scatter runs 14 axpys per SNP at ~1.6 GFLOP/s; an eQTL
+   weight matrix is block-dense per gene (k_g SNPs × C cell types), so the next
+   step is one small GEMM per gene. **Note on the oracle:** plink2 on
+   `synth14` at 20k people took 12:11.93 and 31.5 GB (row `20261022_131138`);
+   it is a fixture-scale tool only, and the production-scale gate for the eQTL
+   step needs a different reference (a validated sparse implementation, or
+   plink2 on a column subset) — a design decision to record in `claude/`.
 3. ~~**Column chunking**: with ~20k genes × 14 cell types = 280k columns, `S` at
    381k people is 850 GB in float64 — chunk the columns (by gene block) and
    write each chunk's float32 to the memmap as it finishes; the SNP reads are
