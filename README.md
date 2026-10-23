@@ -469,8 +469,9 @@ reads per-chromosome shards as one matrix (smoke tests 28–29).
 
 ## 10. The single submission (`port/`)
 
-Goal: features + training as one `sbatch`, minutes for the features. Drafted,
-not yet run on Bouchet:
+Goal: the PRSNet-2 feature build as one submission, minutes instead of
+hours; the features and the model stay exactly PRSNet-2's (Nick's trainer is
+not touched here). Run on Bouchet 2026-10-23, results below. The pieces:
 
 - `port/prsnet2_features.sbatch` — a 22-task array; task = chromosome. Each
   task runs 12a's `snps` sub-step (per-gene lists from the windows,
@@ -508,22 +509,45 @@ about 5–6 min at two chromosomes at a time in a 4-CPU salloc, no plink, no
 cohort bed. The baseline for the same inputs was 12a 4 h 10 min + 12b ~2 h +
 12c ~2.5 h of compute plus queue waits.
 
-Correctness difference to know about: production 12a ran plink
-`--a1-allele target_data.a1` against the raw release; for a strand-flipped
-SNP plink cannot assign that allele (it warns "Impossible A1 allele
-assignment" in its own `.log` and keeps the raw orientation), and 12c's
-`load_gene_plan` then counts the SNP as `n_nomatch` and drops it. The new path
-counts such SNPs on the complemented strand as step 03 intended. On ad/eur
-this touches 2 of 86,402 SNPs (both chr10). Kernel times per chromosome: chr1 31.2 s (8,554 SNPs, 17.7 s of
+**Headline wall time (fresh directory, four chromosomes at a time, same
+4-CPU salloc, commit 80a31de):**
+
+```
+time (seq 1 22 | xargs -P 4 ... port/prsnet2_features.sbatch ; merge_shards.py --pheno ...)
+real    2m11.046s    user 2m54s    sys 0m49s
+```
+
+**2 min 11 s for the whole genome plus the merge**, against 12a 4 h 10 min
++ 12b ~2 h + 12c ~2.5 h (~8.7 h of compute, more with queue waits): about
+240×. Kernel times per chromosome: chr1 31.2 s (8,554 SNPs, 17.7 s of
 seeks), chr5 23.2, chr11 22.1, chr6 21.6, chr8 20.5, chr7 20.4, chr2 19.4,
-chr17 18.3, chr19 16.3, chr3 15.8 … chr21 2.5 s; **302 s of kernel in total
-for the 21**, reads 60–70 % of it, so ~5 min of wall at two at a time
-including the `snps` sub-steps. Selected SNPs: 82,115 over 21 chromosomes
-(P < 0.01 of the Wightman AD GWAS inside gene windows), far fewer than the
-paper's "half a million" on its GWASs; the packed store is 8.5 GB. Against
-the baseline of 12a (4 h 10 min) + 12b (~2 h) + 12c (~2.5 h) that is a
-~100× reduction of the feature build, with the output checked cell for cell
-against the plink path on the fixture.
+chr17 18.3, chr19 16.3, chr10 15.2, chr3 15.8 … chr21 2.5 s; 317 s in total,
+reads 60–70 % of it. Selected SNPs: 86,402 (P < 0.01 of the Wightman AD GWAS
+inside gene windows), far fewer than the paper's "half a million" on its
+GWASs. No task was killed for memory at four at a time in 16 GB.
+
+**Full-cohort check:** `runs/port_full/chr19` (380,962 people) compared
+against `fixture_100k/golden/dosage`, the golden plink made from the 12a
+cohort bed: `PASS: 5078 snps, 0 bad snps, 0 bad cells, 0 missing, 0 bad
+genes` with the 100,000 people matched by IID. Together with the 20k check
+that is every selected chr19 SNP verified cell for cell on 100k of the
+cohort's people.
+
+**Correctness difference, confirmed from production's own files:** 12a ran
+plink `--a1-allele target_data.a1` against the raw release; for a
+strand-flipped SNP plink cannot assign that allele and keeps the raw
+orientation. `prsnet/chr10/target_chr10.PH.log` holds 594 "Impossible A1
+allele assignment" warnings (over every variant of the chr10 PH bed, not
+just the selected ones). rs2201904 was then an index SNP in 12b's
+`.clumped` output for its gene, and 12c's `load_gene_plan`
+(`prod_snapshot/12_prsnet.py:300-306`) skips an index SNP whose gwas A1
+matches neither target allele (`n_nomatch`, "skipped, as plink2 does"), so
+production scored without it. The new path counts such SNPs on the
+complemented strand as step 03's `mismatch.R` intended. On ad/eur this
+touches 2 of 86,402 SNPs (both chr10); the two feature sets are otherwise
+the same SNPs with the same counted alleles. Nothing in either path needs
+changing for this; it is recorded so the difference is not mistaken for a
+bug later.
 
 First Bouchet runs (fixture_20k, 2 threads, commit d7909c0): both select the
 same 5,078 SNPs (P < 0.01: 5,365 in `SNP.pvalue`, 287 not in the `.bim`),
