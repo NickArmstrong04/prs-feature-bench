@@ -495,7 +495,12 @@ not touched here). Run on Bouchet 2026-10-23, results below. The pieces:
   `x2bit.Sharded`, `model_inputs` gives 19,831 nodes, 9,721 genes with SNPs,
   199,019 snp_ids (gene_ids start 2, 5, 7 = A2M, A4GALT, AAAS); a 512-person
   batch took 14.4 s because it is 512 × 22 random row reads off NFS — the
-  memmap mode is for evaluation passes, training uses `load="ram"`. `.model_inputs()` gives
+  memmap mode is for evaluation passes, training uses `load="ram"`. Same
+  directory with `--load ram` (same salloc, shards now in page cache): the
+  7.7 GiB packed genome loaded in 8 s, store open in 10 s, **a 512-person
+  batch in 77 ms** (gather + 22 unpacks + 3→0 + float32), so 20,000 training
+  steps spend ~26 min in the loader on one core, hidden behind the GPU by
+  DataLoader workers. `.model_inputs()` gives
   `PRSNet2(...)` its `n_snps, n_genes, gene_ids, gene2snp_len, snp_ids,
   pvalues` with `gene_ids` = node indices from `gene_order.txt`, ascending,
   exactly as the authors' `train.py` sorts `gene2snps` by key. `--export <dir>`
