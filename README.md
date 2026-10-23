@@ -717,3 +717,32 @@ plain numpy's floor and the lever left for the bed stage is cores.
 reads beats 79,000 short ones by 27 %, so v1's default is 64. Decode (all
 487,409 people, ~79 s summed per chromosome whatever the keep list) is now
 the largest fixed cost.
+
+**Stage 2 reproduced on chr19 (2026-10-23).** plink `--clump` with 12b's flags
+on the v1 cohort bed for all 1,525 chr19 genes with status ok: **1,525
+`.clumped` files identical to production's, 0 differ, 0 missing**; 7 min 52 s
+wall with four plinks at a time in the 4-CPU salloc (user 8:45, sys 3:59 —
+plink's clump is largely I/O and page-cache work on the 14.9 GB bed).
+Production's chr19 12b was two `12bt` tasks (1:40, 1:29 at 4 CPUs) plus
+ERICH4 alone as `12bg` (9:44 on 1 CPU, 17.7 GB).
+
+**Baseline totals from `sacct` (ad/eur, COMPLETED `pnet` jobs since
+2026-09-01, reruns included, so an upper bound):**
+
+| stage | jobs | elapsed (sum) | CPU-hours |
+|---|---|---|---|
+| 12a cohort beds | 44 | 7.9 h | 31.7 |
+| 12bt clump task arrays | 99 | 4.6 h | 18.4 |
+| 12bg giant genes, 1 CPU each | 75 | **23.2 h** | 23.2 |
+| 12bf finalize | 52 | 0.3 h | 0.3 |
+| 12c scoring | 51 | 8.6 h | 34.3 |
+| 12d assembly | 2 | 0.4 h | 1.5 |
+
+The giant-gene clumps are half of all 12-stage job time; that is where a
+numpy clump pays, not in the task arrays.
+
+**Stage 3 golden:** production's `prsnet/chr19/scores/scores_chunk*.npy` were
+removed after 12d (only `scores_manifest.tsv`, `genes_chunk*.txt`,
+`gene_counts.tsv`, `samples.txt` remain), so the chr19 scores golden is cut
+out of `genome/ad_eur/feats.f32` (row = info.csv order, column = gene_index ×
+11 + threshold) for the chr19 genes.
