@@ -699,3 +699,21 @@ re-cleared. Locally identical bytes to v0 at full width; kernel 1.5 s per
 1,000 rows against v0's 2.0 s (decode 0.5, gather 0.9, pack 0.1). The gather
 (381,000 picks a row) is now the floor for plain numpy; beyond it the lever is
 cores, which the final submission has (one array task per chromosome).
+
+**v1 on Bouchet (2026-10-23, commit 380b16e, a different node from v0's
+rows).** Byte-identical on fixture_20k (row `20261023_184717`, 52.0 s) and
+fixture_100k (`20261023_184810`, 64.8 s), and the full chr19 cohort bed from
+v1 is byte-identical to v0's 14.9 GB (`compare_bed.py`, all 156,485 ×
+380,962). Wall is the same as v0's (76.0 s on chr19; summed read 78 s, decode
+79, gather 83, pack 13, write 19): pack fell from 49 s to 13 s but decode and
+gather did not move, so **no speed-up is claimed for the v1 kernel**. Locally
+a decode-free kernel (gather the raw bytes per slot, shift in place) is only
+9 % faster and a per-shift-subgroup scatter 3× slower, so the gather is at
+plain numpy's floor and the lever left for the bed stage is cores.
+**`--max-gap` sweep** (v1, fixture_20k, same node, 4 threads): gap 2 →
+78,817 reads, 1.19× over-read, wall 51.6 s; gap 16 → 3,334 reads, 3.45×,
+44.9 s; **gap 64 → 691 reads, 3.82×, 38.1 s**; gap 256 → 640 reads, 39.0 s
+(rows `20261023_185150/185236/185316`). Reading 3.8× the bytes in 691 long
+reads beats 79,000 short ones by 27 %, so v1's default is 64. Decode (all
+487,409 people, ~79 s summed per chromosome whatever the keep list) is now
+the largest fixed cost.

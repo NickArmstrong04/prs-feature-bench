@@ -22,5 +22,5 @@ RAW=${RAW_BED:-$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); prin
 mkdir -p "$OUT/work"
 awk '{print $2}' "$FIX/geno.bim" > "$OUT/work/extract.txt"
 "$PY" "$D/bed_seek.py" --raw "$RAW" --extract "$OUT/work/extract.txt" --keep "$FIX/geno.fam" \
-    --a1-from-bim "$FIX/geno" --out "$OUT/geno" --threads "$NT" --block "${BLOCK:-256}" --max-gap "${MAX_GAP:-2}" \
+    --a1-from-bim "$FIX/geno" --out "$OUT/geno" --threads "$NT" --block "${BLOCK:-256}" --max-gap "${MAX_GAP:-64}" \
     --unassignable "${UNASSIGNABLE:-minor}"

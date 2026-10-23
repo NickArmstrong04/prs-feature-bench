@@ -16,7 +16,7 @@ SNPs out of the raw release, keep the cohort, orient A1, write a PLINK .bed.
 
     python bed_seek.py --raw <raw prefix> --extract <snplist> --keep <FID IID file>
                        [--a1 <SNP allele file> | --a1-from-bim <prefix>] --out <prefix>
-                       [--block 256] [--max-gap 2] [--threads 4] [--unassignable minor|complement|error]
+                       [--block 256] [--max-gap 64] [--threads 4] [--unassignable minor|complement|error]
 
 Replicates   plink --bfile RAW --keep KEEP --extract EXTRACT --a1-allele A1 --make-bed
 byte for byte, which is what 12a ran per chromosome (4 h 10 min of plink
@@ -186,7 +186,7 @@ def main():
     ap.add_argument("--a1-from-bim", default=None, help="take the counted allele from this prefix's .bim A1 (the fixture)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--block", type=int, default=256, help="wanted rows per read/decode/write block")
-    ap.add_argument("--max-gap", type=int, default=2, help="raw rows further apart than this start a new read")
+    ap.add_argument("--max-gap", type=int, default=64, help="raw rows further apart than this start a new read (64: 691 long reads beat 78,817 short ones on chr19)")
     ap.add_argument("--threads", type=int, default=int(os.environ.get("BENCH_THREADS", "1")))
     ap.add_argument("--unassignable", choices=["minor", "complement", "error"], default="minor")
     a = ap.parse_args()
