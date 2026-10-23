@@ -663,3 +663,27 @@ files identical to production's. chr19's plink log has 0 "Impossible A1"
 warnings, so the minor-allele fallback is still untested on real data; chr10
 (594 of them) is the test. The 4 h 10 min quoted for 12a was the whole array,
 not one chromosome; the per-stage baseline comes from `sacct | grep pnet`.
+
+**chr10 (2026-10-23): the minor-allele fallback on real data.** 342,114 ×
+380,962 = 32.6 GB in 186 s wall (4 workers; read 155 s, decode 185, gather
+158, pack 132, write 72 summed; 172,221 reads, 1.20× over-read) against 12a's
+`ad_eur_pnet_12a_10` at 12 min 21 s. Exactly the 594 SNPs plink had called
+impossible were left to the rule, 151 of them swapped to the minor allele,
+and plink's clump on the new bed matched production's `.clumped` file for all
+nine genes whose windows hold those SNPs (AGAP7 … ZNF518A, 49,728 lines). The
+bed stage is therefore reproduced on both chromosomes tested, including the
+fallback that `dosage_pack_v0` had treated as a strand flip (§10).
+
+**Per-stage baseline from `sacct | grep pnet`** (ad/eur, all 4 CPUs unless
+noted): 12a per chromosome chr1 35:11, chr2 30:58, chr3 28:06, chr4 27:10,
+chr5 10:54, chr6 8:59, chr7 13:05, chr8 13:44, chr9 10:31, chr10 12:21,
+chr11 11:40, chr12 8:50, chr13 5:14, chr14 9:18, chr15 4:44, chr16 4:45,
+chr17 5:40, chr18 3:00, chr19 11:37, chr20 3:14, chr21 1:27, chr22 2:20 —
+**~4 h 23 min of job time summed** (the "4 h 10 min" was this array, not a
+chromosome). 12b is three kinds of job: `12bt` task arrays (1–2 min each,
+2–3 per chromosome), `12bg` giant genes clumped alone on 1 CPU with 14–60 GB
+(chr1 SRGAP 26:24, chr8 SCX/JRK 29:50 each, chr5 PCDHB9 23:19, chr7 SPDYE6
+18:10 …) and `12bf` finalize (seconds); the giants set 12b's wall. 12c per
+chromosome 3–6 min (chr19 5:53, chr2 3:40, chr3 5:15, chr4 2:52). v0's
+projection for the genome is ~47 min on 4 cores (0.5 ms a row), ~5.5× 12a
+like for like; v1 goes after decode/gather/pack, which are ~65 % of worker time.
