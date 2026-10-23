@@ -384,16 +384,28 @@ about selected + gaps and peak memory is the decode buffer, not the span;
 smoke test 25 shows it byte-identical to v0 at gaps 1, 3 and 1000. Bouchet
 run pending.
 
-**Goal for this path (set 2026-10-23):** the full input-feature generation
-currently takes ~24 h; training is ~3 h regardless, so features should come
-down to minutes. The fixture numbers say the compute is not the problem
-(1.5 s for 20k × 5k on one core; the cohort × genome is ~2,000× more cells,
-so ~an hour of single-core decode, spread over 22 chromosome jobs). What
-remains to be measured by scaling the fixture up (§4) is the cluster
-filesystem's behaviour on the ~200 GB sample-major write, and what remains to
-be decided is the layout the trainer reads (per-chromosome int8 shards,
-memmapped) — the released trainer's `np.load` of the whole matrix will not
-work at that size.
+**Goal for this path (set 2026-10-23):** training takes ~3 h regardless, so
+the feature build should take minutes. The baseline is the ad/eur PRS-Net
+build (380,962 people, 22 chromosomes; `claude/prsnet_features.md` §C.7):
+12a, one plink pass over the raw UKB release per chromosome (chr1 = 258 GB)
+to a cohort bed of window SNPs, 4 h 10 min total and NFS-bound; 12b per-gene
+clumping ~2 h; 12c scoring ~2.5 h; 12d stacking minutes. (The "24 h" was
+12b's original per-chromosome request, which never backfilled.) A PRSNet-2
+build replaces 12b + 12c (~4.5 h) with the dosage step, whose fixture cost is
+1.5 s for 20k × 5k cells on one core — the cohort × genome is ~2,000× more
+cells, so ~an hour of single-core decode spread over 22 jobs, i.e. minutes.
+After that 12a is ~95% of what is left, and for this path it is avoidable:
+only SNPs with P < 0.01 are needed (5,078 of 162,703 window SNPs on chr19),
+so a step that seeks to just those rows of the raw release — `--keep` as a
+column gather after the decode, the effect-allele orientation as a per-SNP
+choice of lookup table — reads ~3% of what 12a streams. That is the next
+variant once the raw release layout is known (not reproducible on the
+fixture; it has to read the real chromosome in an salloc, read-only).
+Open with it: the stored layout, since a sample-major int8 matrix for the
+cohort is ~190 GB where the same data 2-bit packed is ~48 GB and a batch of
+512 people decodes through the same lookup table in milliseconds inside the
+trainer's loader. Scaling the fixture up (§4) measures the per-person cost
+and the filesystem's behaviour on the sample-major write.
 
 First Bouchet runs (fixture_20k, 2 threads, commit d7909c0): both select the
 same 5,078 SNPs (P < 0.01: 5,365 in `SNP.pvalue`, 287 not in the `.bim`),
