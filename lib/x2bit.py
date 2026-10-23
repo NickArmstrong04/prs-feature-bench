@@ -53,3 +53,30 @@ def batch(X2, rows, n_snps):
 def open_x2(path, mode="r"):
     """np.load with mmap_mode; returns the (n, B) uint8 memmap."""
     return np.load(path, mmap_mode=mode)
+
+
+class Sharded:
+    """Per-chromosome X2.npy shards read as one (n, sum n_snps) matrix.
+
+        X = Sharded([("chr1/X2.npy", m1), ("chr2/X2.npy", m2), ...])
+        X.n, X.m, X.offsets          # samples, total SNPs, column offset of each shard
+        X.batch(rows)                # (len(rows), m) int8, shards concatenated in list order
+
+    Every shard must have the same samples in the same order (samples.txt
+    identical); the caller checks that once, this class only checks n."""
+    def __init__(self, shards):
+        self.X2 = [open_x2(p) for p, _ in shards]
+        self.ms = [int(m) for _, m in shards]
+        ns = {x.shape[0] for x in self.X2}
+        if len(ns) != 1:
+            raise ValueError(f"shards differ in sample count: {sorted(ns)}")
+        self.n = ns.pop()
+        self.offsets = np.concatenate([[0], np.cumsum(self.ms)])
+        self.m = int(self.offsets[-1])
+
+    def batch(self, rows):
+        rows = np.asarray(rows)
+        out = np.empty((len(rows), self.m), dtype=np.int8)
+        for x, m, o in zip(self.X2, self.ms, self.offsets[:-1]):
+            out[:, o:o + m] = unpack(x[rows], m)
+        return out

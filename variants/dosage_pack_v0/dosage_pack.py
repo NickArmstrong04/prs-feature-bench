@@ -48,7 +48,9 @@ _FLIP = np.array([2, 1, 0, MISSING], dtype=np.int8)                             
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw", required=True, help="raw release plink prefix (one chromosome)")
-    ap.add_argument("--bed", required=True, help="fixture plink prefix: people (.fam), selection ids and A1 (.bim)")
+    ap.add_argument("--bed", required=True, help="plink prefix whose .bim gives the selection ids, positions and A1 (fixture geno, or production ${TARGET}.PH)")
+    ap.add_argument("--keep", default=None, help="people as 'FID IID' lines (production KEEP_LIST); default: the --bed .fam")
+    ap.add_argument("--a1", default=None, help="'SNP allele' lines overriding the .bim A1 as the counted allele (production target_data.a1)")
     ap.add_argument("--pvalue", required=True); ap.add_argument("--genes-dir", required=True)
     ap.add_argument("--manifest", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--pthr", type=float, default=0.01)
@@ -60,7 +62,16 @@ def main():
 
     # selection on the fixture's ids, exactly as dosage_v1
     sid, a1, bp = read_bim(a.bed)
-    fam = read_fam(a.bed)
+    if a.a1:
+        over = {}
+        with open(a.a1) as fh:
+            for l in fh:
+                f = l.split()
+                if len(f) >= 2:
+                    over[f[0]] = f[1]
+        a1 = [over.get(s, x) for s, x in zip(sid, a1)]
+        print(f"a1: {sum(1 for s in sid if s in over)} of {len(sid)} .bim SNPs take their counted allele from {a.a1}", flush=True)
+    fam = read_fam(a.bed) if a.keep is None else [(f[0], f[1]) for f in (l.split() for l in open(a.keep)) if len(f) >= 2]
     pvals = read_pvalues(a.pvalue)
     rows_fix, gene2rows, cnt = select(sid, pvals, a.genes_dir, a.manifest, a.pthr)
     M = len(rows_fix)

@@ -451,8 +451,40 @@ the bytes (~48 GB for the cohort), each person's genome one contiguous row
 dosage_raw_v0 writing X2.npy (blocks start on 4-column boundaries so each
 block is a byte slice); smoke test 27 checks the pack/unpack round trip, that
 the packed store unpacks to dosage_v0's matrix, and that `compare_dosage.py`
-accepts X2 on either side. Bouchet run pending. `lib/x2bit.py` is the file
-the trainer's loader imports.
+accepts X2 on either side. `lib/x2bit.py` is the file the trainer's loader
+imports. **Done, PASS at both sizes** (commit d9d05f7; rows `20261023_141951`
+20k: 4.45 s, 479 MB; `20261023_141956` 100k: 6.24 s, 1015 MB; X2.npy 127 MB
+for 100k × 5,078). The write fell from 2.2 s (int8) to 1.4 s at 100k; a random
+512-person batch off the cluster filesystem took 4 ms cold through
+`x2bit.batch`. `dosage_pack.py` also takes production's inputs directly:
+`--keep <FID IID list>` and `--a1 <SNP allele>` (12a's `KEEP_LIST` and
+`target_data.a1`); smoke test 28 checks both are honoured. `x2bit.Sharded`
+reads per-chromosome shards as one matrix (smoke tests 28–29).
+
+## 10. The single submission (`port/`)
+
+Goal: features + training as one `sbatch`, minutes for the features. Drafted,
+not yet run on Bouchet:
+
+- `port/prsnet2_features.sbatch` — a 22-task array; task = chromosome. Each
+  task runs 12a's `snps` sub-step (per-gene lists from the windows,
+  `gwas.QC.txt`, step 04's `.PH.bim`, giant-window cap) and then
+  `dosage_pack.py` against the raw release with `KEEP_LIST` and
+  `target_data.a1`, writing `$OUT/chr<k>/X2.npy` and sidecars. No plink, no
+  cohort bed. Variable names are those 12a uses from `config.sh`; the first
+  run will tell whether `PRSNET_PY`/`PRSNET_SCRIPT`/`PRSNET_BIG_SNPS` are
+  spelled as assumed.
+- `port/merge_shards.py` — genome-wide `snps.tsv`, `pvalues.npy`,
+  `gene2snps.{tsv,pkl}` with column offsets, and `shards.tsv`; checks all
+  shards share `samples.txt`. Smoke test 29.
+- The training job (not written here; Nick's trainer) opens the shards with
+  `x2bit.Sharded([(path, n_snps), …])` and gets any batch of people as an
+  int8 (batch, total_snps) matrix; `gene2snps.pkl` indexes its columns.
+
+Expected cost at 380,962 people: per task ~3,000–40,000 seeks of 122 KB
+(selected SNPs per chromosome), a decode of 487k people per SNP, a packed
+shard of n × ⌈M/4⌉ bytes (~48 GB genome-wide); minutes per task. The
+dependent training step then starts as soon as the array finishes.
 
 First Bouchet runs (fixture_20k, 2 threads, commit d7909c0): both select the
 same 5,078 SNPs (P < 0.01: 5,365 in `SNP.pvalue`, 287 not in the `.bim`),

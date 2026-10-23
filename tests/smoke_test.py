@@ -438,4 +438,45 @@ for f in ("snps.tsv", "gene2snps.tsv", "samples.txt", "pvalues.npy", "gene2snps.
 line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_ref", f"{W}/dos_pack_bad"], ok=2).splitlines()[-1]; assert "1 bad snps, 1 bad cells" in line, line; print(line, "(one packed cell corrupted)")
 print("27. x2bit pack/unpack/batch round trip; dosage_pack_v0 X2.npy unpacks to dosage_v0's X; compare_dosage handles X2 on either side  OK")
 
+# production options: --keep (FID IID list, here the fixture people in a different order) and --a1 (SNP allele
+# overrides, here the fixture A1 spelled out for every SNP plus a flip for one SNP) ; and x2bit.Sharded
+keep_order = rng.permutation(ns)
+open(f"{W}/keep.txt", "w").write("".join(f"F{i} I{i}\n" for i in keep_order))
+jflip = sel[7]
+with open(f"{W}/a1_over.txt", "w") as w:
+    for j in range(m):
+        w.write(f"{sid[j]} {a2[j] if j == jflip else a1[j]}\n")
+run(PY + [f"{B}/variants/dosage_pack_v0/dosage_pack.py", "--raw", raw2, "--bed", pre, "--pvalue", f"{W}/SNP.pvalue",
+          "--genes-dir", f"{FX}/genes", "--manifest", f"{FX}/gene_manifest.tsv", "--out", f"{W}/dos_pack_prod",
+          "--pthr", str(pthr), "--block-mb", "1", "--sub", "5", "--keep", f"{W}/keep.txt", "--a1", f"{W}/a1_over.txt"])
+Xp = x2bit.unpack(np.load(f"{W}/dos_pack_prod/X2.npy"), len(sel))
+Xexp = Xref[keep_order].copy(); col7 = Xexp[:, 7]; Xexp[:, 7] = np.where(col7 == 3, 3, 2 - col7)
+assert np.array_equal(Xp, Xexp), "--keep order / --a1 flip not honoured"
+assert open(f"{W}/dos_pack_prod/samples.txt").read() == "".join(f"F{i}\tI{i}\n" for i in keep_order)
+assert [l.split("\t")[2] for l in open(f"{W}/dos_pack_prod/snps.tsv").read().splitlines()[1:]][7] == a2[jflip]
+line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_ref", f"{W}/dos_pack_prod"], ok=2).splitlines()
+assert any(l.startswith("ALLELE: 1 SNPs") for l in line), line[-1]        # the deliberate flip is caught against the golden
+sh = x2bit.Sharded([(f"{W}/dos_pack_1/X2.npy", len(sel)), (f"{W}/dos_pack_16/X2.npy", len(sel))])
+assert sh.n == ns and sh.m == 2 * len(sel)
+bb = sh.batch([3, 1, 3]); assert np.array_equal(bb[:, :len(sel)], Xref[[3, 1, 3]]) and np.array_equal(bb[:, len(sel):], Xref[[3, 1, 3]])
+print("28. dosage_pack_v0 --keep (reordered people) and --a1 (one override) honoured and caught by compare; x2bit.Sharded concatenates shards  OK")
+
+# port/merge_shards.py over two copies of the packed shard posing as chr1 and chr2
+import shutil
+MD = f"{W}/merged"; os.makedirs(MD, exist_ok=True)
+for c in (1, 2):
+    shutil.copytree(f"{W}/dos_pack_1", f"{MD}/chr{c}")
+    g2t = open(f"{MD}/chr{c}/gene2snps.tsv").read().replace("CG", f"C{c}G")        # distinct gene names per shard
+    open(f"{MD}/chr{c}/gene2snps.tsv", "w").write(g2t)
+print(run(PY + [f"{B}/port/merge_shards.py", MD, "--chrs", "1-2"]).strip())
+sh_rows = [l.split("\t") for l in open(f"{MD}/shards.tsv").read().splitlines()[1:]]
+assert [(r[0], int(r[2]), int(r[3])) for r in sh_rows] == [("1", len(sel), 0), ("2", len(sel), len(sel))]
+mg = pickle.load(open(f"{MD}/gene2snps.pkl", "rb"))
+for g, cols in g2.items():
+    assert mg[f"C1{g[1:]}"] == cols and mg[f"C2{g[1:]}"] == [c + len(sel) for c in cols], g
+assert np.array_equal(np.load(f"{MD}/pvalues.npy"), np.concatenate([p_all[sel], p_all[sel]]))
+msn = open(f"{MD}/snps.tsv").read().splitlines(); assert len(msn) == 1 + 2 * len(sel) and msn[1 + len(sel)].split("\t")[5] == "2"
+shx = x2bit.Sharded([(r[1], int(r[2])) for r in sh_rows]); assert np.array_equal(shx.batch([0, 9])[:, len(sel):], Xref[[0, 9]])
+print("29. merge_shards: genome-wide offsets, gene2snps, pvalues, snps.tsv, shards.tsv feed x2bit.Sharded  OK")
+
 print("\nALL SMOKE TESTS PASSED")
