@@ -366,9 +366,11 @@ Bench decisions (recorded here because they are not derivable from the code):
 the counted allele is the fixture's `.bim` A1 = GWAS effect allele (plink
 `--recode A` counts the same allele, so a positive beta means risk-increasing
 dosage); missing stays 3, as the released loader expects; a gene's window is
-the fixture's `genes/<gene>.snplist`, i.e. production 12a's window, not the
-paper's ±10 kb — change `PRSNET_WINDOWS` upstream if the paper's rule is
-wanted; SNPs significant but in no gene window are dropped (the model only
+the fixture's `genes/<gene>.snplist`, i.e. production 12a's window — which
+`config.sh` shows **is** the paper's rule: the windows come from the authors'
+`gene_bed_files_10kb` (19,831 genes, hg19, ±10 kb baked in), so ERICH4's
+42 Mb window is the authors' annotation, not ours; SNPs significant but in
+no gene window are dropped (the model only
 ever gathers SNPs through `gene2snps`). Columns are in `.bim` order, so each
 gene's SNPs are a near-contiguous run.
 

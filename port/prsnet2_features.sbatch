@@ -38,11 +38,15 @@ export DISEASE COHORT CHR=${CHR:-$SLURM_ARRAY_TASK_ID}
 ROOT=${ROOT:-/home/naa79/project_pi_sz622/naa79/prs-benchmark}
 BENCH=${BENCH:-/home/naa79/project_pi_sz622/naa79/prs-feature-bench}
 source "$ROOT/scripts/slurm/config.sh"
+# 12_prsnet.sh defines these itself (lines 92-93), config.sh does not
+PRSNET_PY=${PRSNET_PY:-$PRSNET_VENV/bin/python}
+PRSNET_SCRIPT=${PRSNET_SCRIPT:-$ROOT/scripts/slurm/12_prsnet.py}
+[[ -x "$PRSNET_PY" ]] || { echo "MISSING: $PRSNET_PY (12_prsnet.sh setup makes the venv)"; exit 1; }
 PTHR=${PTHR:-0.01}
 OUT=${OUT:-$ROOT/data/processed/$DISEASE/$COHORT/prsnet2}
 mkdir -p "$OUT/chr$CHR/genes" logs
 
-for v in GENO_PREFIX GQC TARGET MIS PRSNET_WINDOWS KEEP_LIST PRSNET_PY PRSNET_SCRIPT; do
+for v in GENO_PREFIX GQC TARGET MIS PRSNET_WINDOWS KEEP_LIST PRSNET_VENV; do
     [[ -n "${!v:-}" ]] || { echo "config.sh does not define $v"; exit 1; }
 done
 for f in "$GENO_PREFIX.bed" "$GENO_PREFIX.bim" "$GENO_PREFIX.fam" "$GQC/gwas.QC.txt" "$GQC/SNP.pvalue" \
