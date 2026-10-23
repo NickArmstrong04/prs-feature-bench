@@ -1,0 +1,73 @@
+#!/bin/bash
+# =============================================================================
+#  variants/ct_sparse_v5/run.sh -- ct_sparse_v3 writing 12c's CHUNK LAYOUT (--out-layout chunks)
+#
+#  Same clumping, weights and kernel as v3; the output is production's per-chunk
+#  layout (scores_chunk<k>.npy + manifest + gene_counts.tsv), which 12d assembles
+#  and compare.py reads directly. Motivation: at 380,962 people v3's column-chunk
+#  writes into the (n, m) memmap took 822 s of a 1016 s chr19 run. v3's header:
+#
+#  Copy of ct_sparse_v2: same clumping (12b), same lib/make_ct_weights.py,
+#  same column chunking (CHUNK_GB) and packed-bed decode; the change is that
+#  this directory's sparse_score.py replaces the float64 block cast + scipy
+#  sparse @ dense with a per-SNP axpy into the transposed chunk result (no
+#  float64 block, no (c x n) temporary). Folded in: .bed rows read with
+#  np.fromfile instead of a memmap (v2's RSS inflation). Compared with
+#  golden/ct. Judge it on the kernel's time line in run.log, not the wall.
+#
+#  Called by run_variant.sh as:  run.sh <fixture_dir> <out_dir>
+# =============================================================================
+set -euo pipefail
+FIX=$1; OUT=$2
+W=$OUT/work; mkdir -p "$W/clumps" "$W/chunks"
+PY=${BENCH_PY:-python3}; LIB=${BENCH_LIB:?}; NT=${BENCH_THREADS:-4}
+D=$(cd "$(dirname "$0")" && pwd)
+
+# fixture params
+eval "$("$PY" - "$FIX/params.json" <<'EOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(f'CHR={d["chr"]}; R2={d["clump_r2"]}; KB={d["clump_kb"]}; THR="{d["thresholds"]}"; GIANT={d["giant_window_mb"]}')
+EOF
+)"
+
+# plink 1.9: module on Bouchet, PATH elsewhere
+if ! command -v plink >/dev/null 2>&1 && command -v module >/dev/null 2>&1; then
+    module load PLINK/1.9b_7.11-x86_64 2>/dev/null || true
+fi
+command -v plink >/dev/null || { echo "plink (1.9) not found"; exit 1; }
+
+# --- 12b: the authors' per-gene clump, same flags as production clump_one
+clump_one() {
+    local g=$1
+    plink --bfile "$FIX/geno" --extract "$FIX/genes/$g.snplist" --chr "$CHR" \
+          --clump-p1 1 --clump-r2 "$R2" --clump-kb "$KB" \
+          --clump "$FIX/genes/$g.assoc" "$FIX/gwas.QC.txt" --clump-index-first \
+          --clump-snp-field SNP --clump-field P \
+          --out "$W/clumps/$g" --memory 1500 --threads 1 > /dev/null 2>&1 || true
+}
+export -f clump_one; export FIX W CHR R2 KB
+awk 'NR>1 && $4>0 {print $1}' "$FIX/gene_manifest.tsv" > "$W/genes.txt"
+echo "clumping $(wc -l < "$W/genes.txt") genes, $NT at a time  ($(date +%T))"
+xargs -a "$W/genes.txt" -P "$NT" -I{} bash -c 'clump_one "$1"' _ {}
+
+# clump_manifest.tsv: identical awk to 12_prsnet.sh write_12b_results
+awk -v D="$W/clumps" 'BEGIN{OFS="\t"}
+     NR==1 {print $0, "n_index", "status"; next}
+     { n=0; st="nosnp"
+       if ($4>0) { f=D"/"$1".clumped"; st="failed"
+           if ((getline l < f) > 0) { st="ok"; while ((getline l < f) > 0) { split(l,a," "); if (length(a)>=3) n++ } }
+           close(f) }
+       print $0, n, st }' "$FIX/gene_manifest.tsv" > "$W/clump_manifest.tsv"
+nfail=$(awk 'NR>1 && $7=="failed"' "$W/clump_manifest.tsv" | wc -l)
+echo "clumped: $(awk 'NR>1 && $7=="ok"' "$W/clump_manifest.tsv" | wc -l) ok, $nfail failed  ($(date +%T))"
+(( nfail == 0 )) || { awk 'NR>1 && $7=="failed" {print "  failed:", $1}' "$W/clump_manifest.tsv"; exit 1; }
+
+# --- the chunked kernel (this variant's copy) instead of 12c
+"$PY" "$LIB/make_ct_weights.py" --clumps "$W/clumps" --manifest "$W/clump_manifest.tsv" \
+    --gwas "$FIX/gwas.QC.txt" --pvalue "$FIX/SNP.pvalue" --thresholds "$THR" \
+    --out "$W/ct_weights.tsv" --genes-out "$W/genes_all.txt"
+echo "scoring, chunk budget ${CHUNK_GB:-1.0} GiB  ($(date +%T))"
+"$PY" "$D/sparse_score.py" --bed "$FIX/geno" --weights "$W/ct_weights.tsv" --out "$OUT" \
+    --mode ct --thresholds "$THR" --all-genes "$W/genes_all.txt" --block "${BLOCK:-4000}" --threads "$NT" \
+    --chunk-gb "${CHUNK_GB:-1.0}" ${CHUNK_COLS:+--chunk-cols "$CHUNK_COLS"} --out-layout chunks

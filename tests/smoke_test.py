@@ -211,6 +211,23 @@ print(run(PY + [V3, "--bed", pre, "--weights", wf, "--out", f"{W}/sum_v3", "--mo
 line = run(PY + [f"{B}/compare.py", f"{W}/gold", f"{W}/sum_v3"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
 print("12. ct_sparse_v3 scatter kernel --mode sum (1-column chunks) == eqtl brute force  OK")
 
+# ct_sparse_v5: v3's kernel writing 12c's chunk layout; compare.py reads it on either side; from_chunks round-trips it
+V5 = f"{B}/variants/ct_sparse_v5/sparse_score.py"
+print(run(PY + [V5, "--bed", pre, "--weights", f"{W}/ctw.tsv", "--out", f"{W}/ct_v5", "--mode", "ct",
+               "--thresholds", " ".join(thr), "--all-genes", f"{W}/genes_all.txt", "--block", "7", "--threads", "1",
+               "--chunk-cols", str(2 * len(thr)), "--out-layout", "chunks"]).splitlines()[-1])
+man = [l.split() for l in open(f"{W}/ct_v5/scores_manifest.tsv").read().splitlines()[1:]]
+assert [int(r[2]) for r in man][:-1] == [2] * (len(man) - 1) and sum(int(r[2]) for r in man) == len(open(f"{W}/genes_all.txt").read().split()), man
+assert not os.path.exists(f"{W}/ct_v5/scores.f32") and not os.path.exists(f"{W}/ct_v5/columns.tsv")
+line = run(PY + [f"{B}/compare.py", f"{W}/gold_ct", f"{W}/ct_v5"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line, "(flat golden, chunk candidate)")
+line = run(PY + [f"{B}/compare.py", f"{W}/ct_v5", f"{W}/ct_v3"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line, "(chunk golden, flat candidate)")
+run(PY + [f"{B}/lib/from_chunks.py", f"{W}/ct_v5", f"{W}/ct_v5_flat"])
+assert open(f"{W}/ct_v5_flat/columns.tsv").read() == open(f"{W}/ct_v0/columns.tsv").read(), "from_chunks(v5) columns.tsv differs from v0 (gene_counts.tsv cumulative counts)"
+assert np.array_equal(np.fromfile(f"{W}/ct_v5_flat/scores.f32", dtype=np.float32), np.fromfile(f"{W}/ct_v3/scores.f32", dtype=np.float32)), "v5 chunks != v3 flat bit for bit"
+gc = [l.split("\t") for l in open(f"{W}/ct_v5/gene_counts.tsv").read().splitlines()]
+assert gc[0][:2] == ["gene", "n_index"] and gc[0][2] == "n_" + thr_lab0 if (thr_lab0 := f"P<={thr[0]}") else False
+print("13a. ct_sparse_v5 --out-layout chunks == v3 bit for bit via from_chunks; compare.py reads chunk layout as golden or candidate  OK")
+
 # eqtl_sparse_v1 is the v3 kernel in --mode sum: its copy must not drift
 import filecmp
 assert filecmp.cmp(V3, f"{B}/variants/eqtl_sparse_v1/sparse_score.py", shallow=False), "eqtl_sparse_v1/sparse_score.py differs from ct_sparse_v3's"

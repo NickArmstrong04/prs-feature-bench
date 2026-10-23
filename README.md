@@ -51,7 +51,8 @@ prs-feature-bench/
     ├── dosage_v0/          first fast PRSNet-2 dosage implementation (packed-bed decode)
     ├── ref_bed/            reference: the fixture's own plink-made bed -> golden/bed (§11)
     ├── bed_seek_v0/        12a's cohort .bed by seeking the raw release, no plink (§11)
-    └── bed_seek_v1/        v0 with a fused gather+pack kernel (§11)
+    ├── bed_seek_v1/        v0 with a fused gather+pack kernel (§11)
+    └── ct_sparse_v5/       ct_sparse_v3 writing 12c's chunk layout (§11)
 ```
 
 `.gitignore` should hold `fixture/ golden/ runs/ lib/ref_12_prsnet.py`.
@@ -746,3 +747,27 @@ removed after 12d (only `scores_manifest.tsv`, `genes_chunk*.txt`,
 `gene_counts.tsv`, `samples.txt` remain), so the chr19 scores golden is cut
 out of `genome/ad_eur/feats.f32` (row = info.csv order, column = gene_index ×
 11 + threshold) for the chr19 genes.
+
+**Stage 3, first full-cohort run (2026-10-23): the scorer is write-bound at
+380,962 people.** `ct_sparse_v3` on the v1 chr19 bed with the verified clumps
+(79,709 (gene, index SNP) weights, 43,906 unique SNPs, 16,786 columns, 48
+chunks of 352 columns at `--chunk-gb 2`): kernel read 15.4 s, decode+impute
+66.7 s, scatter 59.1 s — **141 s of compute against production 12c's 5 min
+53 s on the same 4 CPUs** — but write 821.6 s, 1016 s in all. Each column
+chunk writes 1.4 KB into every row of the 25 GB `(n, m)` memmap, so the file
+is rewritten through NFS pages 48 times. Production's 12c never did this: it
+writes one contiguous `scores_chunk<k>.npy` per chunk and 12d assembles.
+**`ct_sparse_v5`** (`--out-layout chunks`) writes exactly that layout
+(`scores_chunk<k>.npy` (n, G_k, T), `genes_chunk<k>.txt`,
+`scores_manifest.tsv`, `gene_counts.tsv` with cumulative per-bin counts,
+`samples.txt`), one `np.save` per chunk, so 12d consumes it unchanged.
+`compare.py` now reads either layout on either side and compares in row
+blocks (a 25 GB matrix is read once, sequentially; the old column-by-column
+memmap read would touch every page per column); `run_variant.sh` detects the
+chunk layout (fourth layout) by `scores_manifest.tsv`. Smoke test 13a: v5's
+chunks equal v3's flat output bit for bit through `from_chunks.py`.
+
+**Disk:** the project file system was at 99 % (73 GB free of 4 TB) during
+these runs. A genome-wide cohort bed (520 GB) can never exist there; the
+submission must build, clump, score and delete one chromosome at a time
+(chr1's bed alone is 52 GB).

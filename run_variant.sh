@@ -93,6 +93,9 @@ if [[ -f "$OUT/X.npy" || -f "$OUT/X2.npy" ]]; then
 elif [[ -f "$OUT/geno.bed" ]]; then                             # third layout: a PLINK fileset (12a's cohort bed, README s11)
     LAYOUT=bed; FILES="geno.bed geno.bim geno.fam"
     CMP=compare_bed.py; CMP_ARGS=(); BULK=geno.bed; COLF=geno.bim
+elif [[ -f "$OUT/scores_manifest.tsv" ]]; then                  # fourth: 12c's chunk layout (ct_sparse_v5, README s11)
+    LAYOUT=chunks; FILES="samples.txt scores_manifest.tsv gene_counts.tsv"
+    CMP=compare.py; CMP_ARGS=(--rtol "${BENCH_RTOL:-1e-5}" --atol "${BENCH_ATOL:-1e-7}"); BULK="scores_chunk*.npy"; COLF=gene_counts.tsv
 else
     LAYOUT=scores; FILES="samples.txt columns.tsv scores.f32"
     CMP=compare.py; CMP_ARGS=(--rtol "${BENCH_RTOL:-1e-5}" --atol "${BENCH_ATOL:-1e-7}"); BULK=scores.f32; COLF=columns.tsv
@@ -100,7 +103,7 @@ fi
 for f in $FILES; do
     [[ -s "$OUT/$f" ]] || { echo "CONTRACT ($LAYOUT layout): $OUT/$f missing or empty"; exit 2; }
 done
-if [[ "$LAYOUT" == bed ]]; then NCOL=$(wc -l < "$OUT/$COLF"); else NCOL=$(awk 'NR>1' "$OUT/$COLF" | wc -l); fi   # .bim has no header
+if [[ "$LAYOUT" == bed ]]; then NCOL=$(wc -l < "$OUT/$COLF"); else NCOL=$(awk 'NR>1' "$OUT/$COLF" | wc -l); fi   # .bim has no header; chunks: genes
 echo "done:     wall $WALL   cpu ${CPU_S}s   maxrss ${MAXRSS_MB} MB   columns $NCOL   ($LAYOUT layout)"
 
 # --- compare
@@ -127,12 +130,13 @@ if [[ -n "$AS_GOLDEN" ]]; then
     [[ -d "$GOLD/$AS_GOLDEN" ]] && { echo "$GOLD/$AS_GOLDEN exists -- remove it by hand if you really mean to replace it"; exit 3; }
     mkdir -p "$GOLD/$AS_GOLDEN"
     for f in $FILES run.log; do cp "$OUT/$f" "$GOLD/$AS_GOLDEN/"; done
+    [[ "$LAYOUT" == chunks ]] && cp "$OUT"/scores_chunk*.npy "$OUT"/genes_chunk*.txt "$GOLD/$AS_GOLDEN/"
     printf 'variant\t%s\ncommit\t%s\nstamp\t%s\nthreads\t%s\nwall\t%s\nfixture\t%s\n' "$VAR" "$COMMIT$DIRTY" "$STAMP" "$THREADS" "$WALL" "$FIX" > "$GOLD/$AS_GOLDEN/provenance.tsv"
     echo "stored:   $GOLD/$AS_GOLDEN  (from $VAR @ $COMMIT$DIRTY)"
 fi
 
 # --- clean up bulky run output unless asked to keep it
 if (( KEEP == 0 )) && [[ "$VERDICT" == PASS ]]; then
-    rm -f "$OUT/$BULK"; rm -rf "$OUT/work"
+    rm -f $OUT/$BULK; rm -rf "$OUT/work"                      # unquoted: BULK may be a glob (chunks layout)
     echo "          ($BULK and work/ removed; --keep to retain)"
 fi
