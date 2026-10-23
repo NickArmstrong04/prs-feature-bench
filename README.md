@@ -26,6 +26,7 @@ prs-feature-bench/
 ├── run_variant.sh          runs variants/<v>, times it, compares, logs a row
 ├── compare.py              fidelity check: golden vs candidate, scores layout
 ├── compare_dosage.py       exact check for the dosage layout (PRSNet-2 features, §9)
+├── compare_bed.py          exact check for the bed layout (12a's cohort .bed, §11)
 ├── results.tsv             append-only log (created by the first run)
 ├── fixture/                the data (not in git; ~200 MB)
 ├── golden/<name>/          reference outputs (not in git)
@@ -47,7 +48,9 @@ prs-feature-bench/
     ├── ref_eqtl_plink2/    oracle: plink2 multi-column --score -> golden/eqtl_<set>
     ├── eqtl_sparse_v0/     first fast eQTL implementation (bed-reader + scipy)
     ├── ref_dosage/         reference: plink --recode A -> golden/dosage (PRSNet-2 features, §9)
-    └── dosage_v0/          first fast PRSNet-2 dosage implementation (packed-bed decode)
+    ├── dosage_v0/          first fast PRSNet-2 dosage implementation (packed-bed decode)
+    ├── ref_bed/            reference: the fixture's own plink-made bed -> golden/bed (§11)
+    └── bed_seek_v0/        12a's cohort .bed by seeking the raw release, no plink (§11)
 ```
 
 `.gitignore` should hold `fixture/ golden/ runs/ lib/ref_12_prsnet.py`.
@@ -595,3 +598,52 @@ Gene load is skewed by the giant window: ERICH4 carries 2,224 of the 5,078
 SNPs, the next genes 382 (MARK4), 177 (PVRL2), 154, 147. The `p` column of
 `snps.tsv` was written as `np.float64(...)` in these two runs (numpy 2 repr);
 fixed to a plain float, so golden/dosage should be remade once.
+
+## 11. Replicating PRS-Net: the 12a / 12b / 12c chain without the hours
+
+Decided 2026-10-23: the goal is the ORIGINAL PRS-Net (the trainer
+`train_prsnet.py` in `prod_snapshot/` reads 12d's `feats.f32`, gene × 11
+thresholds, and stays as it is), not PRSNet-2 (§9–10, kept but shelved). The
+features are the production chain: 12a cohort bed (window-union SNPs, `--keep`
+cohort, `--a1-allele target_data.a1`) → 12b plink per-gene clump (r² 0.5,
+250 kb, p1 1, index-first) → 12c scores at 11 thresholds → 12d `feats.f32`.
+Each stage is replaced separately and checked against the production artefact
+of that stage:
+
+| stage | production | replacement | golden on Bouchet |
+|---|---|---|---|
+| 12a | plink streams the 3.65 TB release, 4 h 10 min | `bed_seek_v0`: seek the window rows, gather the cohort, write the bed | the cohort beds were deleted; `fixture_20k/geno` and `fixture_100k/geno` are plink-made beds of the same kind for 20k/100k cohort people → `golden/bed`; the 12b `.clumped` files are the downstream check |
+| 12b | per-gene plink `--clump`, ~2 h | first unchanged on the new bed (identical bed ⇒ identical clumps); later a numpy clump variant | `prsnet/chr<k>/clumps/<gene>.clumped`, all 22 chromosomes |
+| 12c | `12_prsnet.py score`, ~2.5 h | `ct_sparse_v3` (§7) | `prsnet/chr19/scores/` chunks; genome-wide `genome/ad_eur/feats.f32` (332 GB, 380,962 × 19,831 × 11) |
+
+Sizes that set the floor (from `window.snplist` / `clump_manifest.tsv`):
+5.46 M window SNPs over 22 chromosomes (chr1 545,489 … chr21 48,446), i.e.
+666 GB to read from the raw release (487,409 people per row) and a 520 GB
+cohort bed (380,962 per row); 2.53 M index-SNP gene links for scoring. The
+file system is not the limit: a cold sequential read of a raw bed ran at
+3.2 GB/s, four readers at once at ~5.3 GB/s, so the read is 3–4 min of wall.
+12a's hours were plink's decode, and the replacement's cost is CPU too:
+decode, gather the kept 78 % of people, repack.
+
+**`bed_seek_v0`** (`variants/bed_seek_v0/bed_seek.py`) reproduces
+`plink --bfile RAW --keep --extract --a1-allele --make-bed` byte for byte:
+variants in raw `.bim` order, people in raw `.fam` order, allele == raw A2 ⇒
+`.bim` alleles and homozygous codes swapped, and for an allele that is neither
+("Impossible A1 allele assignment", 594 on chr10) plink's 1.9 default applies,
+A1 = the minor allele among the kept people (`--unassignable minor`, the
+production behaviour; `complement` matches through the strand instead, as
+`dosage_pack_v0` does). Blocks of 256 wanted rows: gap-split `np.fromfile`
+reads, 256 × 4 table decode, column gather, swap, `x2bit.pack`, write at the
+row's offset; `--threads` workers take contiguous row ranges (fork). Smoke
+test 31 checks the rules against a brute force and `compare_bed.py`'s verdicts.
+Local timing at full width (487,636 raw people, 380,962 kept, one core):
+read 0.1 s, decode 0.6 s, gather 1.0 s, pack 0.4 s per 1,000 rows, ~2.5 ms a
+row, so ~3.8 core-hours for the genome, about an hour on four cores — v0's
+honest estimate before any Bouchet measurement. v1 should gather the 2-bit
+fields straight out of the raw bytes and pack in the same pass (the gather is
+the cost).
+
+The **bed layout** (third layout of `run_variant.sh`, detected by `geno.bed`):
+`geno.bed/.bim/.fam` in the output dir, compared by `compare_bed.py` exactly
+(fam fields, bim rows, every genotype byte; differing variants are named with
+the number of differing people and whether their `.bim` alleles are swapped).

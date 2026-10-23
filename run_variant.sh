@@ -90,6 +90,9 @@ if [[ -f "$OUT/X.npy" || -f "$OUT/X2.npy" ]]; then
     BULK=X.npy; [[ -f "$OUT/X.npy" ]] || BULK=X2.npy             # int8, or the 2-bit store (lib/x2bit.py)
     LAYOUT=dosage; FILES="samples.txt snps.tsv $BULK pvalues.npy gene2snps.tsv gene2snps.pkl"
     CMP=compare_dosage.py; CMP_ARGS=(); COLF=snps.tsv
+elif [[ -f "$OUT/geno.bed" ]]; then                             # third layout: a PLINK fileset (12a's cohort bed, README s11)
+    LAYOUT=bed; FILES="geno.bed geno.bim geno.fam"
+    CMP=compare_bed.py; CMP_ARGS=(); BULK=geno.bed; COLF=geno.bim
 else
     LAYOUT=scores; FILES="samples.txt columns.tsv scores.f32"
     CMP=compare.py; CMP_ARGS=(--rtol "${BENCH_RTOL:-1e-5}" --atol "${BENCH_ATOL:-1e-7}"); BULK=scores.f32; COLF=columns.tsv
@@ -97,7 +100,7 @@ fi
 for f in $FILES; do
     [[ -s "$OUT/$f" ]] || { echo "CONTRACT ($LAYOUT layout): $OUT/$f missing or empty"; exit 2; }
 done
-NCOL=$(awk 'NR>1' "$OUT/$COLF" | wc -l)
+if [[ "$LAYOUT" == bed ]]; then NCOL=$(wc -l < "$OUT/$COLF"); else NCOL=$(awk 'NR>1' "$OUT/$COLF" | wc -l); fi   # .bim has no header
 echo "done:     wall $WALL   cpu ${CPU_S}s   maxrss ${MAXRSS_MB} MB   columns $NCOL   ($LAYOUT layout)"
 
 # --- compare

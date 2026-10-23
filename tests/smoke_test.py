@@ -526,4 +526,74 @@ assert np.array_equal(np.load(f"{EX}/Y.npy"), st_ram.labels) and np.array_equal(
 eg = pickle.load(open(f"{EX}/gene2snps.pkl", "rb")); assert eg == {node[g]: cols for g, cols in mg.items()}
 print("30. prsnet2_store: ram/memmap rows match the shards (3 -> 0 as src/dataset.py), model_inputs sorted by node id, export = authors' layout  OK")
 
+# variants/bed_seek_v0: plink's --keep --extract --a1-allele --make-bed rules, byte for byte, against a brute force
+BS = f"{W}/bedseek"; os.makedirs(f"{BS}/raw", exist_ok=True)
+nr, mr = 37, 25                                                   # raw people (not a multiple of 4), raw variants
+codes = rng.integers(0, 4, size=(mr, nr)).astype(np.uint8)        # raw bed codes 0 homA1 1 missing 2 het 3 homA2
+alle = [("A", "G"), ("C", "T"), ("G", "A"), ("T", "C")]
+ids = [f"rs{j}" for j in range(mr)]
+with open(f"{BS}/raw/r.bim", "w") as w:
+    for j in range(mr):
+        w.write(f"5\t{ids[j]}\t0\t{1000 + 10 * j}\t{alle[j % 4][0]}\t{alle[j % 4][1]}\n")
+open(f"{BS}/raw/r.fam", "w").write("".join(f"F{i} I{i} 0 0 {1 + i % 2} -9\n" for i in range(nr)))
+with open(f"{BS}/raw/r.bed", "wb") as w:
+    w.write(b"\x6c\x1b\x01"); w.write(x2bit.pack(codes).tobytes())
+want = sorted(rng.choice(mr, size=15, replace=False)); keep_p = sorted(rng.choice(nr, size=22, replace=False))
+open(f"{BS}/extract.txt", "w").write("".join(ids[j] + "\n" for j in rng.permutation(want)))          # shuffled: order must not matter
+open(f"{BS}/keep.txt", "w").write("".join(f"F{i} I{i}\n" for i in rng.permutation(keep_p)))
+# counted allele: raw A1 for some, raw A2 (swap) for some, impossible ('N') for two, absent for the rest (minor rule)
+kind = {j: ["a1", "a2", "n", "none"][k % 4] for k, j in enumerate(want)}
+with open(f"{BS}/a1.txt", "w") as w:
+    for j in want:
+        if kind[j] == "a1": w.write(f"{ids[j]} {alle[j % 4][0]}\n")
+        elif kind[j] == "a2": w.write(f"{ids[j]} {alle[j % 4][1]}\n")
+        elif kind[j] == "n": w.write(f"{ids[j]} N\n")
+sub = codes[np.ix_(want, keep_p)].copy()                          # brute force expectation
+exp_swap = []
+for r, j in enumerate(want):
+    if kind[j] == "a2": sw = True
+    elif kind[j] == "a1": sw = False
+    else:                                                          # plink default: A1 = minor allele among kept people
+        c = sub[r]; n1 = 2 * (c == 0).sum() + (c == 2).sum(); tot = 2 * (c != 1).sum()
+        sw = bool(2 * n1 > tot)
+    if sw:
+        sub[r] = np.array([3, 1, 2, 0], dtype=np.uint8)[sub[r]]; exp_swap.append(j)
+assert exp_swap and len(exp_swap) < len(want)
+out = run(PY + [f"{B}/variants/bed_seek_v0/bed_seek.py", "--raw", f"{BS}/raw/r", "--extract", f"{BS}/extract.txt", "--keep", f"{BS}/keep.txt",
+                "--a1", f"{BS}/a1.txt", "--out", f"{BS}/out/geno", "--block", "4", "--max-gap", "1", "--threads", "3"])
+got = np.fromfile(f"{BS}/out/geno.bed", dtype=np.uint8, offset=3).reshape(len(want), (len(keep_p) + 3) // 4)
+assert np.array_equal(x2bit.unpack(got, len(keep_p)), sub), "bed codes differ from the brute force"
+bim_o = [l.split() for l in open(f"{BS}/out/geno.bim")]
+assert [b[1] for b in bim_o] == [ids[j] for j in want], "variants not in raw .bim order"
+for b, j in zip(bim_o, want):
+    a1e, a2e = alle[j % 4][::-1] if j in exp_swap else alle[j % 4]
+    assert b[4] == a1e and b[5] == a2e, (b, j in exp_swap)
+assert [l.split()[:2] for l in open(f"{BS}/out/geno.fam")] == [[f"F{i}", f"I{i}"] for i in keep_p], "people not in raw .fam order"
+assert "minor-allele rule swapped" in out
+# compare_bed: PASS against itself, FAIL naming swapped alleles when the a1 list flips one SNP, FAIL on a corrupted byte
+os.makedirs(f"{BS}/gold", exist_ok=True)
+for e in ("bed", "bim", "fam"): open(f"{BS}/gold/geno.{e}", "wb").write(open(f"{BS}/out/geno.{e}", "rb").read())
+line = run(PY + [f"{B}/compare_bed.py", f"{BS}/gold", f"{BS}/out"]).splitlines()[-1]; assert line.startswith("PASS"), line
+j1 = [j for j in want if kind[j] == "a1"][0]
+open(f"{BS}/a1_flip.txt", "w").write(open(f"{BS}/a1.txt").read().replace(f"{ids[j1]} {alle[j1 % 4][0]}", f"{ids[j1]} {alle[j1 % 4][1]}"))
+run(PY + [f"{B}/variants/bed_seek_v0/bed_seek.py", "--raw", f"{BS}/raw/r", "--extract", f"{BS}/extract.txt", "--keep", f"{BS}/keep.txt",
+          "--a1", f"{BS}/a1_flip.txt", "--out", f"{BS}/flip/geno", "--threads", "1"])
+txt = run(PY + [f"{B}/compare_bed.py", f"{BS}/gold", f"{BS}/flip"], ok=2)
+assert "1 of 15 variants differ, 1 of them with swapped .bim alleles" in txt and ids[j1] in txt, txt
+bad = bytearray(open(f"{BS}/out/geno.bed", "rb").read()); bad[3 + 2 * got.shape[1]] ^= 0b11
+os.makedirs(f"{BS}/bad", exist_ok=True); open(f"{BS}/bad/geno.bed", "wb").write(bad)
+for e in ("bim", "fam"): open(f"{BS}/bad/geno.{e}", "w").write(open(f"{BS}/out/geno.{e}").read())
+txt = run(PY + [f"{B}/compare_bed.py", f"{BS}/gold", f"{BS}/bad"], ok=2); assert "1 of 15 variants differ, 0 of them" in txt and "(1 people)" in txt, txt
+# --unassignable complement: 'N' is still an error there, so a strand-flipped allele instead (complement of raw A2 -> swap)
+jn = [j for j in want if kind[j] == "n"][0]; comp = {"A": "T", "T": "A", "C": "G", "G": "C"}
+open(f"{BS}/a1_comp.txt", "w").write(open(f"{BS}/a1.txt").read().replace(f"{ids[jn]} N", f"{ids[jn]} {comp[alle[jn % 4][1]]}"))
+out = run(PY + [f"{B}/variants/bed_seek_v0/bed_seek.py", "--raw", f"{BS}/raw/r", "--extract", f"{BS}/extract.txt", "--keep", f"{BS}/keep.txt",
+                "--a1", f"{BS}/a1_comp.txt", "--out", f"{BS}/comp/geno", "--threads", "2", "--unassignable", "complement"])
+assert "1 matched on the other strand" in out, out
+bim_c = {l.split()[1]: l.split()[4:6] for l in open(f"{BS}/comp/geno.bim")}
+assert bim_c[ids[jn]] == list(alle[jn % 4][::-1]), bim_c[ids[jn]]
+run(PY + [f"{B}/variants/bed_seek_v0/bed_seek.py", "--raw", f"{BS}/raw/r", "--extract", f"{BS}/extract.txt", "--keep", f"{BS}/keep.txt",
+          "--a1", f"{BS}/a1.txt", "--out", f"{BS}/err/geno", "--unassignable", "error"], ok=1)
+print("31. bed_seek_v0: plink --keep/--extract/--a1-allele/--make-bed rules reproduced (raw order, swaps, minor-allele default, complement mode); compare_bed PASS/FAIL  OK")
+
 print("\nALL SMOKE TESTS PASSED")
