@@ -50,7 +50,8 @@ prs-feature-bench/
     ├── ref_dosage/         reference: plink --recode A -> golden/dosage (PRSNet-2 features, §9)
     ├── dosage_v0/          first fast PRSNet-2 dosage implementation (packed-bed decode)
     ├── ref_bed/            reference: the fixture's own plink-made bed -> golden/bed (§11)
-    └── bed_seek_v0/        12a's cohort .bed by seeking the raw release, no plink (§11)
+    ├── bed_seek_v0/        12a's cohort .bed by seeking the raw release, no plink (§11)
+    └── bed_seek_v1/        v0 with a fused gather+pack kernel (§11)
 ```
 
 `.gitignore` should hold `fixture/ golden/ runs/ lib/ref_12_prsnet.py`.
@@ -687,3 +688,14 @@ chromosome). 12b is three kinds of job: `12bt` task arrays (1–2 min each,
 chromosome 3–6 min (chr19 5:53, chr2 3:40, chr3 5:15, chr4 2:52). v0's
 projection for the genome is ~47 min on 4 cores (0.5 ms a row), ~5.5× 12a
 like for like; v1 goes after decode/gather/pack, which are ~65 % of worker time.
+
+**`bed_seek_v1`** (`variants/bed_seek_v1/`): the same rules, reads and files
+as v0 with a fused kernel — decode through a 256-entry uint32 table (one
+take), the kept people gathered in four strided groups `keep[s::4]` each
+shifted into its 2-bit slot and OR-ed straight into the output bytes (no
+(k, n) code matrix, no pack pass), and allele swaps applied to the packed
+bytes of the swapped rows through a 256-entry table with the padding bits
+re-cleared. Locally identical bytes to v0 at full width; kernel 1.5 s per
+1,000 rows against v0's 2.0 s (decode 0.5, gather 0.9, pack 0.1). The gather
+(381,000 picks a row) is now the floor for plain numpy; beyond it the lever is
+cores, which the final submission has (one array task per chromosome).

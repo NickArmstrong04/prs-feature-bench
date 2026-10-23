@@ -574,6 +574,11 @@ assert "minor-allele rule swapped" in out
 os.makedirs(f"{BS}/gold", exist_ok=True)
 for e in ("bed", "bim", "fam"): open(f"{BS}/gold/geno.{e}", "wb").write(open(f"{BS}/out/geno.{e}", "rb").read())
 line = run(PY + [f"{B}/compare_bed.py", f"{BS}/gold", f"{BS}/out"]).splitlines()[-1]; assert line.startswith("PASS"), line
+# bed_seek_v1 (fused gather+pack, packed-byte swaps, minor rule) must give the same bytes; n = 22 is not a multiple of 4
+out1 = run(PY + [f"{B}/variants/bed_seek_v1/bed_seek.py", "--raw", f"{BS}/raw/r", "--extract", f"{BS}/extract.txt", "--keep", f"{BS}/keep.txt",
+                 "--a1", f"{BS}/a1.txt", "--out", f"{BS}/v1/geno", "--block", "4", "--max-gap", "1", "--threads", "3"])
+assert out1.split("minor-allele rule swapped")[1].split(";")[0] == out.split("minor-allele rule swapped")[1].split(";")[0]
+line = run(PY + [f"{B}/compare_bed.py", f"{BS}/gold", f"{BS}/v1"]).splitlines()[-1]; assert line.startswith("PASS"), line
 j1 = [j for j in want if kind[j] == "a1"][0]
 open(f"{BS}/a1_flip.txt", "w").write(open(f"{BS}/a1.txt").read().replace(f"{ids[j1]} {alle[j1 % 4][0]}", f"{ids[j1]} {alle[j1 % 4][1]}"))
 run(PY + [f"{B}/variants/bed_seek_v0/bed_seek.py", "--raw", f"{BS}/raw/r", "--extract", f"{BS}/extract.txt", "--keep", f"{BS}/keep.txt",
@@ -594,6 +599,6 @@ bim_c = {l.split()[1]: l.split()[4:6] for l in open(f"{BS}/comp/geno.bim")}
 assert bim_c[ids[jn]] == list(alle[jn % 4][::-1]), bim_c[ids[jn]]
 run(PY + [f"{B}/variants/bed_seek_v0/bed_seek.py", "--raw", f"{BS}/raw/r", "--extract", f"{BS}/extract.txt", "--keep", f"{BS}/keep.txt",
           "--a1", f"{BS}/a1.txt", "--out", f"{BS}/err/geno", "--unassignable", "error"], ok=1)
-print("31. bed_seek_v0: plink --keep/--extract/--a1-allele/--make-bed rules reproduced (raw order, swaps, minor-allele default, complement mode); compare_bed PASS/FAIL  OK")
+print("31. bed_seek_v0 + v1 (same bytes): plink --keep/--extract/--a1-allele/--make-bed rules reproduced (raw order, swaps, minor-allele default, complement mode); compare_bed PASS/FAIL  OK")
 
 print("\nALL SMOKE TESTS PASSED")
