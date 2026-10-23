@@ -5,7 +5,10 @@ Read README.md first (sections 2 and 6 are the contract and the method).
 
 ## Never
 - Edit `variants/ref_ct/`, `variants/ref_eqtl_plink2/`, `lib/ref_12_prsnet.py`,
-  anything under `fixture/` or `golden/`. If a reference looks wrong, say so
+  anything under `fixture/`, `golden/` or `prod_snapshot/` (read-only copies
+  of the production PRS-Net scripts; `prod_snapshot/MANIFEST.txt` has the
+  provenance and md5s — production is the source of truth, re-snapshot from
+  there). If a reference looks wrong, say so
   and stop; the fix belongs in the production scripts on the cluster.
 - Loosen `--rtol`/`--atol` to make a variant pass. A numeric deviation gets a
   new, named golden and a note here, not a wider tolerance.

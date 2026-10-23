@@ -38,6 +38,10 @@ prs-feature-bench/
 ├── eqtl/
 │   └── weights_to_plink2.py  long-format weights -> plink2 wide score file
 ├── tests/smoke_test.py     synthetic end-to-end test of the Python pieces
+├── port/                   the single-submission draft (§10): features sbatch + merge_shards.py
+├── prod_snapshot/          READ-ONLY copies of the production scripts (12_prsnet.{sh,py}, trainer,
+│                           config.sh, …); MANIFEST.txt = provenance + md5s. Two optimisation
+│                           lines branch from them: PRS-Net (ct/dosage variants) and the eQTL addition
 └── variants/
     ├── ref_ct/             reference: production 12b + 12c   -> golden/ct
     ├── ref_eqtl_plink2/    oracle: plink2 multi-column --score -> golden/eqtl_<set>
