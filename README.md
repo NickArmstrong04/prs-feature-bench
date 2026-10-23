@@ -381,8 +381,33 @@ cover both against a brute-force `bed-reader` read and `compare_dosage.py`'s
 PASS/FAIL behaviour. `dosage_v1` = v0 with each block read as runs of
 selected rows no more than `MAX_GAP` (256) rows apart, so the read volume is
 about selected + gaps and peak memory is the decode buffer, not the span;
-smoke test 25 shows it byte-identical to v0 at gaps 1, 3 and 1000. Bouchet
-run pending.
+smoke test 25 shows it byte-identical to v0 at gaps 1, 3 and 1000.
+**Done, PASS at both sizes** (2 threads, commit 7115489):
+
+| fixture | row | variant | wall | kernel (select / read / decode / write) | peak RSS |
+|---|---|---|---|---|---|
+| 20k | `20261023_130230` | dosage_v0 | 1.55 s | 0.4 / 0.2 / 0.1 / 0.5 | 1009 MB |
+| 20k | `20261023_134137` | dosage_v1 | 1.18 s | 0.4 / 0.1 / 0.1 / 0.5 | 305 MB |
+| 100k | `20261023_134424` | ref_dosage | 8.88 s | plink --recode A + convert | 1552 MB |
+| 100k | `20261023_134433` | dosage_v1 | 4.71 s | 0.9 / 0.8 / 0.6 / 2.2 | 1270 MB |
+
+v1 reads 64,121 rows in 182 spans (12.6× the 5,078 selected) instead of the
+whole chromosome. 20k → 100k scales linearly (kernel 1.1 → 4.6 s; the write
+is half of it), so the full ad/eur cohort on chr19 is ~20 s, and the genome
+(~22× the SNPs) a few minutes of single-core work across 22 jobs. The
+`--recode A` reference scales the same way and is itself only 2× slower, so
+this step is not where time goes any more; 12a is.
+
+**`dosage_raw_v0`** (smoke test 26, Bouchet run pending) does without 12a:
+it seeks to the selected rows of the raw release chromosome named in the
+fixture's `params.json` (`source_bed`, when `source_mode` is `raw`), decodes
+all ~488k raw people, gathers the fixture's people (`--keep`), flips the SNPs
+the raw `.bim` stores on the other allele to the fixture's A1 (`--a1-allele`),
+and writes the same layout. Output columns stay in fixture `.bim` order even
+when the raw order differs (then the block write is a column scatter). The
+smoke test feeds it a shuffled raw release with extra people and SNPs and half
+the shared SNPs on the other allele; it reproduces dosage_v0 cell for cell.
+This is the one variant that reads outside the fixture, read-only, by design.
 
 **Goal for this path (set 2026-10-23):** training takes ~3 h regardless, so
 the feature build should take minutes. The baseline is the ad/eur PRS-Net
@@ -401,11 +426,12 @@ column gather after the decode, the effect-allele orientation as a per-SNP
 choice of lookup table — reads ~3% of what 12a streams. That is the next
 variant once the raw release layout is known (not reproducible on the
 fixture; it has to read the real chromosome in an salloc, read-only).
-Open with it: the stored layout, since a sample-major int8 matrix for the
-cohort is ~190 GB where the same data 2-bit packed is ~48 GB and a batch of
-512 people decodes through the same lookup table in milliseconds inside the
-trainer's loader. Scaling the fixture up (§4) measures the per-person cost
-and the filesystem's behaviour on the sample-major write.
+Open with it: the stored layout. The trainer is Nick's own re-implementation
+of the paper, to become one Slurm submission with the feature build, so the
+layout is ours to choose: a sample-major int8 matrix for the cohort is
+~190 GB where the same data 2-bit packed, sample-major, is ~48 GB, each
+person's genome a contiguous ~125 KB row, and a batch of 512 people decodes
+through the same lookup table in milliseconds inside the loader.
 
 First Bouchet runs (fixture_20k, 2 threads, commit d7909c0): both select the
 same 5,078 SNPs (P < 0.01: 5,365 in `SNP.pvalue`, 287 not in the `.bim`),
