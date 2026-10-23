@@ -497,7 +497,24 @@ chromosomes then completed; chr10 stopped at rs2201904: the counted allele
 strand, so `dosage_pack.py` now matches the counted allele through its
 complement as well (A→T etc.), reports how many SNPs were matched that way,
 and still errors on anything else. Smoke test 27's synthetic release stores
-every third shared SNP on the other strand. Kernel times per chromosome: chr1 31.2 s (8,554 SNPs, 17.7 s of
+every third shared SNP on the other strand. chr10 then ran in 15.2 s (4,287
+SNPs, 2 of them matched on the other strand; the other 21 chromosomes had
+none, or they would have stopped the same way).
+
+**All 22 shards merged:** 380,962 people × **86,402 SNPs**, 9,721 genes with
+≥ 1 selected SNP, 199,019 gene–SNP links, 3,162 cases in `info.csv`; packed
+store 8.2 GB (8.9 GB with sidecars). Kernel time for the genome 317 s; wall
+about 5–6 min at two chromosomes at a time in a 4-CPU salloc, no plink, no
+cohort bed. The baseline for the same inputs was 12a 4 h 10 min + 12b ~2 h +
+12c ~2.5 h of compute plus queue waits.
+
+Correctness difference to know about: production 12a ran plink
+`--a1-allele target_data.a1` against the raw release; for a strand-flipped
+SNP plink cannot assign that allele (it warns "Impossible A1 allele
+assignment" in its own `.log` and keeps the raw orientation), and 12c's
+`load_gene_plan` then counts the SNP as `n_nomatch` and drops it. The new path
+counts such SNPs on the complemented strand as step 03 intended. On ad/eur
+this touches 2 of 86,402 SNPs (both chr10). Kernel times per chromosome: chr1 31.2 s (8,554 SNPs, 17.7 s of
 seeks), chr5 23.2, chr11 22.1, chr6 21.6, chr8 20.5, chr7 20.4, chr2 19.4,
 chr17 18.3, chr19 16.3, chr3 15.8 … chr21 2.5 s; **302 s of kernel in total
 for the 21**, reads 60–70 % of it, so ~5 min of wall at two at a time
