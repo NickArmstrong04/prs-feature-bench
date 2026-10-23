@@ -385,4 +385,16 @@ covers almost the whole chromosome (156,359 rows read for 5,078 selected,
 (row `20261023_125954`) failed its own allele check: plink 1.9 re-labels A1
 as the minor allele when writing a new fileset, so `--recode A` counted the
 other allele for rs72984410. Fixed with `--keep-allele-order` and an explicit
-`--recode-allele` list taken from the `.bim`; golden/dosage not yet made.
+`--recode-allele` list taken from the `.bim`.
+
+**`dosage_v0` PASSES** (rows `20261023_130227` ref_dosage → golden/dosage,
+`20261023_130230` dosage_v0; fixture_20k, 2 threads, commit bf60f7d): all
+5,078 × 20,000 cells, alleles, P and 838 gene sets identical. Wall 1.55 s vs
+the reference's 2.31 s — on 20k people the reference is already fast, so the
+bench question for this path is not speed but memory and shape: peak RSS
+1009 MB vs 367 MB (the whole-chromosome span read), and at 411k × 500k the
+matrix is ~200 GB, which neither `np.load` nor one memmap per job handles.
+Gene load is skewed by the giant window: ERICH4 carries 2,224 of the 5,078
+SNPs, the next genes 382 (MARK4), 177 (PVRL2), 154, 147. The `p` column of
+`snps.tsv` was written as `np.float64(...)` in these two runs (numpy 2 repr);
+fixed to a plain float, so golden/dosage should be remade once.

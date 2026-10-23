@@ -79,7 +79,7 @@ def main():
     with open(os.path.join(a.out, "snps.tsv"), "w") as w:
         w.write("col\tsnp\ta1\tbp\tp\n")
         for j, s in enumerate(snps):
-            w.write(f"{j}\t{s}\t{a1s[j]}\t{bim_bp[s]}\t{p[j]!r}\n")
+            w.write(f"{j}\t{s}\t{a1s[j]}\t{bim_bp[s]}\t{float(p[j])!r}\n")
     g2 = {}
     with open(a.pairs) as fh:
         for l in fh:

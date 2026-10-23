@@ -162,7 +162,7 @@ def main():
     with open(os.path.join(a.out, "snps.tsv"), "w") as w:
         w.write("col\tsnp\ta1\tbp\tp\n")
         for j, r in enumerate(rows):
-            r = int(r); w.write(f"{j}\t{sid[r]}\t{a1[r]}\t{bp[r]}\t{pv[j]!r}\n")
+            r = int(r); w.write(f"{j}\t{sid[r]}\t{a1[r]}\t{bp[r]}\t{float(pv[j])!r}\n")
     g2c = {g: [col_of_row[r] for r in rs] for g, rs in gene2rows.items()}
     with open(os.path.join(a.out, "gene2snps.pkl"), "wb") as w:
         pickle.dump(g2c, w)
