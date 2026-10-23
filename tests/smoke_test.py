@@ -363,4 +363,43 @@ for gap in ("1", "3", "1000"):
 line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_ref", f"{W}/dos_v1_3"]).splitlines()[-1]; assert line.startswith("PASS"), line
 print("25. dosage_v1 (max-gap 1, 3, 1000) byte-identical to dosage_v0; PASS vs reference  OK")
 
+# dosage_raw_v0: a synthetic "raw release" with more people (shuffled, fixture people interleaved), extra SNPs
+# interleaved, and half the shared SNPs stored on the other allele; the fixture bed `pre` is what 12a would
+# have made from it. The seek path must reproduce dosage_v0's output cell for cell.
+n_extra_p, n_extra_s = 150, 250
+rawp = f"{W}/rawrel"
+raw_people = [f"I{i}" for i in range(ns)] + [f"X{i}" for i in range(n_extra_p)]
+pp = rng.permutation(len(raw_people)); raw_people = [raw_people[i] for i in pp]
+raw_sids = sid + [f"19:{900000 + i}" for i in range(n_extra_s)]
+ps = rng.permutation(len(raw_sids)); raw_sids = [raw_sids[i] for i in ps]
+raw_flip = {s: bool(rng.random() < 0.5) for s in sid}
+Graw = np.full((len(raw_people), len(raw_sids)), np.nan, dtype=np.float32)
+Gx = rng.integers(0, 3, size=(len(raw_people), len(raw_sids))).astype(np.float32); Gx[rng.random(Gx.shape) < 0.05] = np.nan
+Graw[:] = Gx
+rp = {p: i for i, p in enumerate(raw_people)}; rs = {s: j for j, s in enumerate(raw_sids)}
+ra1, ra2 = [], []
+for s in raw_sids:
+    if s in rs and s in raw_flip:
+        j = sid.index(s)
+        col = G[:, j] if not raw_flip[s] else 2 - G[:, j]                      # stored on the other allele -> 2 - x
+        for i in range(ns):
+            Graw[rp[f"I{i}"], rs[s]] = col[i]
+        ra1.append(a2[j] if raw_flip[s] else a1[j]); ra2.append(a1[j] if raw_flip[s] else a2[j])
+    else:
+        ra1.append("A"); ra2.append("C")
+to_bed(rawp + ".bed", Graw, properties={"fid": [f"F{p[1:]}" if p[0] == "I" else "FX" for p in raw_people], "iid": raw_people,
+                                        "sid": raw_sids, "chromosome": ["19"] * len(raw_sids),
+                                        "bp_position": [int(s.split(":")[1]) for s in raw_sids], "allele_1": ra1, "allele_2": ra2})
+for bm in ("16", "1"):
+    out = run(PY + [f"{B}/variants/dosage_raw_v0/dosage_raw.py", "--raw", rawp, "--bed", pre, "--pvalue", f"{W}/SNP.pvalue",
+                    "--genes-dir", f"{FX}/genes", "--manifest", f"{FX}/gene_manifest.tsv", "--out", f"{W}/dos_raw_{bm}",
+                    "--pthr", str(pthr), "--block-mb", bm, "--sub", "5", "--max-gap", "2"])
+    Xr = np.load(f"{W}/dos_raw_{bm}/X.npy")
+    assert Xr.shape == Xref.shape and np.array_equal(Xr, Xref), f"raw path differs from the fixture path (block-mb {bm})"
+    for f in ("snps.tsv", "gene2snps.tsv", "samples.txt"):
+        assert open(f"{W}/dos_raw_{bm}/{f}").read() == open(f"{W}/dos_v0/{f}").read(), f
+    print("   " + [l for l in out.splitlines() if l.startswith("raw:")][0])
+line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_ref", f"{W}/dos_raw_1"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
+print("26. dosage_raw_v0 from a shuffled raw release with flipped alleles == dosage_v0 (block-mb 16 and 1); PASS vs reference  OK")
+
 print("\nALL SMOKE TESTS PASSED")
