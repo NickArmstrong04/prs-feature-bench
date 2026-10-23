@@ -771,3 +771,7 @@ chunks equal v3's flat output bit for bit through `from_chunks.py`.
 these runs. A genome-wide cohort bed (520 GB) can never exist there; the
 submission must build, clump, score and delete one chromosome at a time
 (chr1's bed alone is 52 GB).
+Full-cohort outputs therefore live in Nick's scratch space
+(`/home/naa79/scratch_pi_sz622/naa79/prs-feature-bench/`), symlinked from
+`runs/` where a path is needed; fixture-scale runs stay in `runs/` (the
+harness deletes their bulk on PASS).
