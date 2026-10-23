@@ -130,7 +130,12 @@ cluster, run once on the candidate that wins here.
 At 2,000 × 305k the fixture is too small to show NFS or memory effects. When a
 variant is about throughput at 381k people, make a second fixture with
 `N=50000 CHR=19` (≈3.8 GB) and point `run_variant.sh` at it with
-`BENCH_FIXTURE=…` (not implemented yet; add the variable when needed).
+`BENCH_FIXTURE=…`. Implemented: `fixture_20k` (N=20,000) is the timing
+fixture used from §7 item 2 on; goldens live in `<fixture>/golden/`. The
+scale-up plan for the PRSNet-2 path (§9) is `fixture_100k`, then the whole
+ad/eur chr19 cohort, each made with
+`BENCH_FIXTURE=$BENCH/fixture_<tag> N=<n> CHR=19 bash make_fixture.sh`
+inside an salloc (the raw fallback streams the chromosome once).
 
 ## 5. The eQTL weight file (`fixture/weights/<set>.tsv`)
 
@@ -373,7 +378,22 @@ Variants: `ref_dosage` (awk selection + plink 1.9 `--recode A` +
 (`variants/dosage_v0/dosage.py`, one Python pass). Knobs: `PTHR` (default
 0.01), `BLOCK` (selected SNPs per decode block, 4000). Smoke tests 23–24
 cover both against a brute-force `bed-reader` read and `compare_dosage.py`'s
-PASS/FAIL behaviour.
+PASS/FAIL behaviour. `dosage_v1` = v0 with each block read as runs of
+selected rows no more than `MAX_GAP` (256) rows apart, so the read volume is
+about selected + gaps and peak memory is the decode buffer, not the span;
+smoke test 25 shows it byte-identical to v0 at gaps 1, 3 and 1000. Bouchet
+run pending.
+
+**Goal for this path (set 2026-10-23):** the full input-feature generation
+currently takes ~24 h; training is ~3 h regardless, so features should come
+down to minutes. The fixture numbers say the compute is not the problem
+(1.5 s for 20k × 5k on one core; the cohort × genome is ~2,000× more cells,
+so ~an hour of single-core decode, spread over 22 chromosome jobs). What
+remains to be measured by scaling the fixture up (§4) is the cluster
+filesystem's behaviour on the ~200 GB sample-major write, and what remains to
+be decided is the layout the trainer reads (per-chromosome int8 shards,
+memmapped) — the released trainer's `np.load` of the whole matrix will not
+work at that size.
 
 First Bouchet runs (fixture_20k, 2 threads, commit d7909c0): both select the
 same 5,078 SNPs (P < 0.01: 5,365 in `SNP.pvalue`, 287 not in the `.bim`),

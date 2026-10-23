@@ -352,4 +352,15 @@ r = subprocess.run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_v0", f"{W}/dos_bada
 assert r.returncode == 2 and "ALLELE: 1 SNPs" in r.stdout, r.stdout; print(r.stdout.splitlines()[-1], "(one allele label flipped)")
 print("24. dosage_from_raw == dosage_v0; compare_dosage PASS/FAIL behaviour  OK")
 
+# dosage_v1: gap-split spans; must be byte-identical to v0 at every gap setting (gap 1 = one span per run of adjacent rows)
+for gap in ("1", "3", "1000"):
+    out = run(PY + [f"{B}/variants/dosage_v1/dosage.py", "--bed", pre, "--pvalue", f"{W}/SNP.pvalue", "--genes-dir", f"{FX}/genes",
+                    "--manifest", f"{FX}/gene_manifest.tsv", "--out", f"{W}/dos_v1_{gap}", "--pthr", str(pthr), "--block", "7", "--max-gap", gap])
+    assert open(f"{W}/dos_v1_{gap}/X.npy", "rb").read() == open(f"{W}/dos_v0/X.npy", "rb").read(), f"v1 gap {gap} differs from v0"
+    for f in ("snps.tsv", "gene2snps.tsv", "samples.txt"):
+        assert open(f"{W}/dos_v1_{gap}/{f}").read() == open(f"{W}/dos_v0/{f}").read(), f
+    print("   gap", gap, "->", [l for l in out.splitlines() if "spans" in l][0].split("span rows")[1].strip())
+line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_ref", f"{W}/dos_v1_3"]).splitlines()[-1]; assert line.startswith("PASS"), line
+print("25. dosage_v1 (max-gap 1, 3, 1000) byte-identical to dosage_v0; PASS vs reference  OK")
+
 print("\nALL SMOKE TESTS PASSED")
