@@ -9,6 +9,7 @@
 #  MIS, PRSNET_WINDOWS, KEEP_LIST, PRSNET_PY, PRSNET_SCRIPT, PRSNET_BIG_SNPS).
 #
 #      sbatch --export=DISEASE=ad,COHORT=eur port/prsnet2_features.sbatch
+#  Knobs (env): PNET2_PTHR (0.01), PNET2_OUT, PNET2_BLOCK_MB, PNET2_SUB, PNET2_MAX_GAP.
 #
 #  Per task (chromosome $SLURM_ARRAY_TASK_ID):
 #    1. 12a's `snps` sub-step: per-gene snplists + gene_manifest.tsv from the
@@ -42,8 +43,9 @@ source "$ROOT/scripts/slurm/config.sh"
 PRSNET_PY=${PRSNET_PY:-$PRSNET_VENV/bin/python}
 PRSNET_SCRIPT=${PRSNET_SCRIPT:-$ROOT/scripts/slurm/12_prsnet.py}
 [[ -x "$PRSNET_PY" ]] || { echo "MISSING: $PRSNET_PY (12_prsnet.sh setup makes the venv)"; exit 1; }
-PTHR=${PTHR:-0.01}
-OUT=${OUT:-$ROOT/data/processed/$DISEASE/$COHORT/prsnet2}
+# knobs are PNET2_*: config.sh owns plain names such as SUB and OUT
+PTHR=${PNET2_PTHR:-0.01}
+OUT=${PNET2_OUT:-$ROOT/data/processed/$DISEASE/$COHORT/prsnet2}
 mkdir -p "$OUT/chr$CHR/genes" logs
 
 for v in GENO_PREFIX GQC TARGET MIS PRSNET_WINDOWS KEEP_LIST PRSNET_VENV; do
@@ -66,5 +68,5 @@ echo "raw:   $GENO_PREFIX"; echo "keep:  $KEEP_LIST ($(wc -l < "$KEEP_LIST") peo
 BENCH_LIB=$BENCH/lib "$PRSNET_PY" "$BENCH/variants/dosage_pack_v0/dosage_pack.py" \
     --raw "$GENO_PREFIX" --bed "${TARGET}.PH" --keep "$KEEP_LIST" --a1 "$MIS/target_data.a1" \
     --pvalue "$GQC/SNP.pvalue" --genes-dir "$OUT/chr$CHR/genes" --manifest "$OUT/chr$CHR/gene_manifest.tsv" \
-    --out "$OUT/chr$CHR" --pthr "$PTHR" --block-mb "${BLOCK_MB:-512}" --sub "${SUB:-64}" --max-gap "${MAX_GAP:-2}"
+    --out "$OUT/chr$CHR" --pthr "$PTHR" --block-mb "${PNET2_BLOCK_MB:-512}" --sub "${PNET2_SUB:-64}" --max-gap "${PNET2_MAX_GAP:-2}"
 echo "== done chr$CHR  ($(date))"
