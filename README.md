@@ -77,6 +77,7 @@ these files; `run_variant.sh` tells the layouts apart by the presence of
 | `samples.txt` | `FID<TAB>IID`, row order of `X.npy` |
 | `snps.tsv` | header `col snp a1 bp p`; one row per column; `a1` = the counted allele |
 | `X.npy` | int8, shape (n_samples, n_snps): copies of `a1`, 0/1/2, **3 = missing** |
+| or `X2.npy` | the same codes 2-bit packed, uint8 (n_samples, ⌈n_snps/4⌉), SNP j in bits 2(j mod 4) of byte ⌊j/4⌋ (`lib/x2bit.py`); `compare_dosage.py` unpacks it, so either side may use either |
 | `pvalues.npy` | float64 (n_snps,): GWAS P per column |
 | `gene2snps.tsv` | header `gene n_snps snps`; `snps` = comma-separated snp ids |
 | `gene2snps.pkl` | dict gene → list of column indices (what the PRSNet-2 loader reads) |
@@ -439,12 +440,19 @@ column gather after the decode, the effect-allele orientation as a per-SNP
 choice of lookup table — reads ~3% of what 12a streams. That is the next
 variant once the raw release layout is known (not reproducible on the
 fixture; it has to read the real chromosome in an salloc, read-only).
-Open with it: the stored layout. The trainer is Nick's own re-implementation
-of the paper, to become one Slurm submission with the feature build, so the
-layout is ours to choose: a sample-major int8 matrix for the cohort is
-~190 GB where the same data 2-bit packed, sample-major, is ~48 GB, each
-person's genome a contiguous ~125 KB row, and a batch of 512 people decodes
-through the same lookup table in milliseconds inside the loader.
+The stored layout: the trainer is Nick's own re-implementation of the paper,
+to become one Slurm submission with the feature build, so the layout is ours
+to choose. GPU nodes have 1–2.3 TB of RAM, so even the int8 matrix (~190 GB
+for the cohort) fits; what the layout decides is load time and disk. The
+2-bit sample-major store **`X2.npy`** (`lib/x2bit.py`, §2) is a quarter of
+the bytes (~48 GB for the cohort), each person's genome one contiguous row
+(~125 KB), a batch of any 512 people a row gather plus `unpack()` — 64 MB,
+~0.3 s on one core, hidden by DataLoader workers. **`dosage_pack_v0`** =
+dosage_raw_v0 writing X2.npy (blocks start on 4-column boundaries so each
+block is a byte slice); smoke test 27 checks the pack/unpack round trip, that
+the packed store unpacks to dosage_v0's matrix, and that `compare_dosage.py`
+accepts X2 on either side. Bouchet run pending. `lib/x2bit.py` is the file
+the trainer's loader imports.
 
 First Bouchet runs (fixture_20k, 2 threads, commit d7909c0): both select the
 same 5,078 SNPs (P < 0.01: 5,365 in `SNP.pvalue`, 287 not in the `.bim`),

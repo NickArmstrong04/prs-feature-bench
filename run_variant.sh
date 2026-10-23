@@ -86,9 +86,10 @@ if (( RC != 0 )); then
 fi
 # two layouts (README s2): scores (scores.f32, compared with tolerance) or
 # dosage (X.npy int8 + sidecars, compared exactly); told apart by X.npy
-if [[ -f "$OUT/X.npy" ]]; then
-    LAYOUT=dosage; FILES="samples.txt snps.tsv X.npy pvalues.npy gene2snps.tsv gene2snps.pkl"
-    CMP=compare_dosage.py; CMP_ARGS=(); BULK=X.npy; COLF=snps.tsv
+if [[ -f "$OUT/X.npy" || -f "$OUT/X2.npy" ]]; then
+    BULK=X.npy; [[ -f "$OUT/X.npy" ]] || BULK=X2.npy             # int8, or the 2-bit store (lib/x2bit.py)
+    LAYOUT=dosage; FILES="samples.txt snps.tsv $BULK pvalues.npy gene2snps.tsv gene2snps.pkl"
+    CMP=compare_dosage.py; CMP_ARGS=(); COLF=snps.tsv
 else
     LAYOUT=scores; FILES="samples.txt columns.tsv scores.f32"
     CMP=compare.py; CMP_ARGS=(--rtol "${BENCH_RTOL:-1e-5}" --atol "${BENCH_ATOL:-1e-7}"); BULK=scores.f32; COLF=columns.tsv

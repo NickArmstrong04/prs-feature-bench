@@ -12,6 +12,20 @@ Extra candidate SNPs/genes are reported, not compared. Exit 0 = PASS, 2 = FAIL.
 """
 import argparse, os, sys
 import numpy as np
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from x2bit import unpack
+
+
+class _Unpacked:
+    """Row-sliceable view of an X2.npy memmap that unpacks on access (compare reads row blocks)."""
+    def __init__(self, X2, m):
+        self.X2, self.m = X2, m
+
+    def __getitem__(self, idx):
+        if isinstance(idx, tuple):                         # X[rows][:, cols] is two steps; X[r0:r1] is one
+            rows, cols = idx
+            return unpack(self.X2[rows], self.m)[:, cols]
+        return unpack(self.X2[idx], self.m)
 
 
 def load(d):
@@ -24,9 +38,16 @@ def load(d):
             f = l.rstrip("\n").split("\t")
             if f:
                 snps.append(f[isnp]); a1.append(f[ia1])
-    X = np.load(os.path.join(d, "X.npy"), mmap_mode="r")
-    if X.shape != (len(iids), len(snps)) or X.dtype != np.int8:
-        sys.exit(f"{d}/X.npy: shape {X.shape} dtype {X.dtype}, expected ({len(iids)}, {len(snps)}) int8")
+    if os.path.exists(os.path.join(d, "X.npy")):
+        X = np.load(os.path.join(d, "X.npy"), mmap_mode="r")
+        if X.shape != (len(iids), len(snps)) or X.dtype != np.int8:
+            sys.exit(f"{d}/X.npy: shape {X.shape} dtype {X.dtype}, expected ({len(iids)}, {len(snps)}) int8")
+    else:                                                  # 2-bit store: unpacked row block by row block
+        X2 = np.load(os.path.join(d, "X2.npy"), mmap_mode="r")
+        B = (len(snps) + 3) // 4
+        if X2.shape != (len(iids), B) or X2.dtype != np.uint8:
+            sys.exit(f"{d}/X2.npy: shape {X2.shape} dtype {X2.dtype}, expected ({len(iids)}, {B}) uint8")
+        X = _Unpacked(X2, len(snps))
     p = np.load(os.path.join(d, "pvalues.npy"))
     g2 = {}
     with open(os.path.join(d, "gene2snps.tsv")) as fh:
@@ -44,8 +65,8 @@ def main():
     ap.add_argument("--show", type=int, default=10)
     a = ap.parse_args()
     for d in (a.golden, a.candidate):
-        if not os.path.exists(os.path.join(d, "X.npy")):
-            sys.exit(f"{d}: no X.npy -- not a dosage-layout output (golden and candidate must share a contract)")
+        if not (os.path.exists(os.path.join(d, "X.npy")) or os.path.exists(os.path.join(d, "X2.npy"))):
+            sys.exit(f"{d}: no X.npy / X2.npy -- not a dosage-layout output (golden and candidate must share a contract)")
     g_iid, g_snp, g_a1, G, g_p, g_g2 = load(a.golden)
     c_iid, c_snp, c_a1, C, c_p, c_g2 = load(a.candidate)
 

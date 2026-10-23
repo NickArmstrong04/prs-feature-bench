@@ -402,4 +402,40 @@ for bm in ("16", "1"):
 line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_ref", f"{W}/dos_raw_1"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line)
 print("26. dosage_raw_v0 from a shuffled raw release with flipped alleles == dosage_v0 (block-mb 16 and 1); PASS vs reference  OK")
 
+# lib/x2bit: pack/unpack round trip (odd widths, batch gather), then dosage_pack_v0 on an in-order raw release
+sys.path.insert(0, f"{B}/lib"); import x2bit
+for k in (1, 3, 4, 5, 89, 400):
+    A = rng.integers(0, 4, size=(37, k)).astype(np.int8)
+    P = x2bit.pack(A); assert P.shape == (37, (k + 3) // 4) and P.dtype == np.uint8
+    assert np.array_equal(x2bit.unpack(P, k), A), k
+    assert np.array_equal(x2bit.batch(P, [5, 0, 5, 36], k), A[[5, 0, 5, 36]])
+# an in-order raw release: the fixture's SNPs in fixture order, extra SNPs appended, same people shuffle and flips as above
+raw2 = f"{W}/rawrel2"
+ord_sids = sid + [f"19:{900000 + i}" for i in range(n_extra_s)]
+G2 = np.stack([Graw[:, rs[s]] for s in ord_sids], axis=1)
+ra1b = [ra1[rs[s]] for s in ord_sids]; ra2b = [ra2[rs[s]] for s in ord_sids]
+to_bed(raw2 + ".bed", G2, properties={"fid": [f"F{p[1:]}" if p[0] == "I" else "FX" for p in raw_people], "iid": raw_people,
+                                      "sid": ord_sids, "chromosome": ["19"] * len(ord_sids),
+                                      "bp_position": [int(s.split(":")[1]) for s in ord_sids], "allele_1": ra1b, "allele_2": ra2b})
+os.environ["BENCH_LIB"] = f"{B}/lib"
+for bm in ("16", "1"):
+    out = run(PY + [f"{B}/variants/dosage_pack_v0/dosage_pack.py", "--raw", raw2, "--bed", pre, "--pvalue", f"{W}/SNP.pvalue",
+                    "--genes-dir", f"{FX}/genes", "--manifest", f"{FX}/gene_manifest.tsv", "--out", f"{W}/dos_pack_{bm}",
+                    "--pthr", str(pthr), "--block-mb", bm, "--sub", "5", "--max-gap", "2"])
+    X2 = np.load(f"{W}/dos_pack_{bm}/X2.npy")
+    assert X2.dtype == np.uint8 and X2.shape == (ns, (len(sel) + 3) // 4), X2.shape
+    assert np.array_equal(x2bit.unpack(X2, len(sel)), Xref), f"packed store differs (block-mb {bm})"
+    assert not os.path.exists(f"{W}/dos_pack_{bm}/X.npy")
+    for f in ("snps.tsv", "gene2snps.tsv", "samples.txt"):
+        assert open(f"{W}/dos_pack_{bm}/{f}").read() == open(f"{W}/dos_v0/{f}").read(), f
+    print("   " + [l for l in out.splitlines() if l.startswith("dosage[pack_v0]")][0])
+line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_ref", f"{W}/dos_pack_1"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line, "(X2 candidate vs int8 golden)")
+line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_pack_1", f"{W}/dos_shuf"]).splitlines()[-1]; assert line.startswith("PASS"), line; print(line, "(X2 golden vs shuffled int8 candidate)")
+X2bad = np.load(f"{W}/dos_pack_1/X2.npy").copy(); X2bad[3, 0] ^= 0b11
+os.makedirs(f"{W}/dos_pack_bad", exist_ok=True); np.save(f"{W}/dos_pack_bad/X2.npy", X2bad)
+for f in ("snps.tsv", "gene2snps.tsv", "samples.txt", "pvalues.npy", "gene2snps.pkl"):
+    open(f"{W}/dos_pack_bad/{f}", "wb").write(open(f"{W}/dos_pack_1/{f}", "rb").read())
+line = run(PY + [f"{B}/compare_dosage.py", f"{W}/dos_ref", f"{W}/dos_pack_bad"], ok=2).splitlines()[-1]; assert "1 bad snps, 1 bad cells" in line, line; print(line, "(one packed cell corrupted)")
+print("27. x2bit pack/unpack/batch round trip; dosage_pack_v0 X2.npy unpacks to dosage_v0's X; compare_dosage handles X2 on either side  OK")
+
 print("\nALL SMOKE TESTS PASSED")
