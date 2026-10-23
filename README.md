@@ -484,9 +484,22 @@ not touched here). Run on Bouchet 2026-10-23, results below. The pieces:
 - `port/merge_shards.py` — genome-wide `snps.tsv`, `pvalues.npy`,
   `gene2snps.{tsv,pkl}` with column offsets, and `shards.tsv`; checks all
   shards share `samples.txt`. Smoke test 29.
-- The training job (not written here; Nick's trainer) opens the shards with
-  `x2bit.Sharded([(path, n_snps), …])` and gets any batch of people as an
-  int8 (batch, total_snps) matrix; `gene2snps.pkl` indexes its columns.
+- `port/prsnet2_store.py` — `DosageStore(data_dir, load="ram", gene_order=…)`,
+  the trainer's view of the merged directory, shaped like `train_prsnet.py`'s
+  `FeatureStore`: `.n .m .labels .sample_ids`, `.rows(idx)` → float32 torch
+  with missing (3) → 0 as the authors' `src/dataset.py` does, `.rows_int8(idx)`.
+  `load="ram"` holds the packed genome as one (n, 21,620) uint8 array (8.2 GB
+  for ad/eur) so a batch is a row gather plus 22 shift-or unpacks;
+  `load="memmap"` leaves the shards on disk. `.model_inputs()` gives
+  `PRSNet2(...)` its `n_snps, n_genes, gene_ids, gene2snp_len, snp_ids,
+  pvalues` with `gene_ids` = node indices from `gene_order.txt`, ascending,
+  exactly as the authors' `train.py` sorts `gene2snps` by key. `--export <dir>`
+  writes the authors' own layout (`X.npy` int8 n × m, `Y.npy`, `pvalues.npy`,
+  `gene2snps.pkl` with node-index keys; 33 GB for ad/eur) for a trainer that
+  wants the whole matrix in memory as their `train.py` does. Smoke test 30;
+  the CLI checks three random rows against `x2bit.Sharded` and times a batch.
+  Shard paths in `shards.tsv` are resolved as written, then relative to the
+  directory, then as `chr<k>/X2.npy`, so a moved directory still opens.
 
 **First full run (2026-10-23, commit 278d4d4, inside a 4-CPU salloc, two
 chromosomes at a time, ad/eur 380,962 people).** The chr19 dry run PASSED

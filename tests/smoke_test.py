@@ -490,4 +490,40 @@ msn = open(f"{MD}/snps.tsv").read().splitlines(); assert len(msn) == 1 + 2 * len
 shx = x2bit.Sharded([(r[1], int(r[2])) for r in sh_rows]); assert np.array_equal(shx.batch([0, 9])[:, len(sel):], Xref[[0, 9]])
 print("29. merge_shards: genome-wide offsets, gene2snps, pvalues, snps.tsv, shards.tsv feed x2bit.Sharded  OK")
 
+# port/prsnet2_store.py: the trainer's view of the merged directory (ram and memmap), model inputs, export
+sys.path.insert(0, f"{B}/port")
+from prsnet2_store import DosageStore
+Xfull = np.concatenate([Xref, Xref], axis=1)                      # chr1 and chr2 are copies of the same shard
+Xzero = np.where(Xfull == 3, 0, Xfull)
+genes_all = sorted(mg) ; extra = ["ZZZ_NOSNP", "AAA_NOSNP"]
+order = extra[:1] + genes_all[::-1] + extra[1:]                    # node ids in a deliberately non-sorted order
+open(f"{W}/gene_order.txt", "w").write("".join(g + "\n" for g in order))
+cwd0 = os.getcwd(); os.chdir(B)                                   # shards.tsv paths are as merge_shards saw them
+try:
+    st_ram = DosageStore(MD, load="ram", gene_order=f"{W}/gene_order.txt", log=lambda *_: None)
+    st_mm = DosageStore(MD, load="memmap", gene_order=f"{W}/gene_order.txt", missing_to_zero=False)
+finally:
+    os.chdir(cwd0)
+assert st_ram.n == ns and st_ram.m == 2 * len(sel) and st_ram.labels.tolist() == [int(i % 3 == 0) for i in range(ns)]
+pick = [5, 0, 5, ns - 1, 2]
+assert np.array_equal(st_ram.rows_int8(pick), Xzero[pick]), "ram rows (3 -> 0)"
+assert np.array_equal(st_mm.rows_int8(pick), Xfull[pick]), "memmap rows (3 kept), unsorted index order"
+assert (Xfull[pick] == 3).any(), "test data should contain missing calls"
+try:
+    import torch
+    t = st_ram.rows(pick); assert t.dtype == torch.float32 and np.array_equal(t.numpy(), Xzero[pick].astype(np.float32))
+except ImportError:
+    pass
+mi = st_ram.model_inputs()
+node = {g: i for i, g in enumerate(order)}
+assert mi["gene_ids"] == sorted(node[g] for g in mg) and mi["n_genes"] == len(order) and mi["n_snps"] == 2 * len(sel)
+exp_snp = [c for gid in mi["gene_ids"] for c in mg[order[gid]]]
+assert mi["snp_ids"] == exp_snp and mi["gene2snp_len"] == [len(mg[order[gid]]) for gid in mi["gene_ids"]]
+assert mi["gene_names"] == [order[i] for i in mi["gene_ids"]] and not any(g in mi["gene_names"] for g in extra)
+EX = f"{W}/export"; st_ram.export(EX, chunk=3, log=lambda *_: None)
+assert np.array_equal(np.load(f"{EX}/X.npy"), Xfull) and np.load(f"{EX}/X.npy").dtype == np.int8
+assert np.array_equal(np.load(f"{EX}/Y.npy"), st_ram.labels) and np.array_equal(np.load(f"{EX}/pvalues.npy"), np.load(f"{MD}/pvalues.npy"))
+eg = pickle.load(open(f"{EX}/gene2snps.pkl", "rb")); assert eg == {node[g]: cols for g, cols in mg.items()}
+print("30. prsnet2_store: ram/memmap rows match the shards (3 -> 0 as src/dataset.py), model_inputs sorted by node id, export = authors' layout  OK")
+
 print("\nALL SMOKE TESTS PASSED")
