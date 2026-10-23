@@ -487,10 +487,21 @@ not yet run on Bouchet:
   `x2bit.Sharded([(path, n_snps), …])` and gets any batch of people as an
   int8 (batch, total_snps) matrix; `gene2snps.pkl` indexes its columns.
 
-Expected cost at 380,962 people: per task ~3,000–40,000 seeks of 122 KB
-(selected SNPs per chromosome), a decode of 487k people per SNP, a packed
-shard of n × ⌈M/4⌉ bytes (~48 GB genome-wide); minutes per task. The
-dependent training step then starts as soon as the array finishes.
+**First full run (2026-10-23, commit 278d4d4, inside a 4-CPU salloc, two
+chromosomes at a time, ad/eur 380,962 people).** The chr19 dry run PASSED
+against `fixture_20k/golden/dosage` with the fixture's 20,000 people matched
+by IID inside the cohort (380,962 × 5,078, 14.6 s kernel). 21 of 22
+chromosomes then completed; chr10 exited 1 before its `raw:` line (being
+looked at). Kernel times per chromosome: chr1 31.2 s (8,554 SNPs, 17.7 s of
+seeks), chr5 23.2, chr11 22.1, chr6 21.6, chr8 20.5, chr7 20.4, chr2 19.4,
+chr17 18.3, chr19 16.3, chr3 15.8 … chr21 2.5 s; **302 s of kernel in total
+for the 21**, reads 60–70 % of it, so ~5 min of wall at two at a time
+including the `snps` sub-steps. Selected SNPs: 82,115 over 21 chromosomes
+(P < 0.01 of the Wightman AD GWAS inside gene windows), far fewer than the
+paper's "half a million" on its GWASs; the packed store is 8.5 GB. Against
+the baseline of 12a (4 h 10 min) + 12b (~2 h) + 12c (~2.5 h) that is a
+~100× reduction of the feature build, with the output checked cell for cell
+against the plink path on the fixture.
 
 First Bouchet runs (fixture_20k, 2 threads, commit d7909c0): both select the
 same 5,078 SNPs (P < 0.01: 5,365 in `SNP.pvalue`, 287 not in the `.bim`),
