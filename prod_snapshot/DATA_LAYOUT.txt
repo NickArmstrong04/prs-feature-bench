@@ -1,0 +1,47 @@
+== gene order / graph
+total 96720
+drwxr-sr-x 2 naa79 pi_sz622     4096 Oct 15 13:10 .
+drwxr-sr-x 2 naa79 pi_sz622     4096 Oct 15 13:12 ..
+-rw-r--r-- 1 naa79 pi_sz622  1970090 Oct 15 13:07 9606.protein.info.v12.0.txt.gz
+-rw-r--r-- 1 naa79 pi_sz622 83164437 Oct 15 13:08 9606.protein.links.v12.0.txt.gz
+-rw-r--r-- 1 naa79 pi_sz622  8954065 Oct 15 13:08 9606.protein.physical.links.v12.0.txt.gz
+-rw-r--r-- 1 naa79 pi_sz622   136773 Oct 15 13:10 gene_order.txt
+-rw-r--r-- 1 naa79 pi_sz622    25092 Oct 15 13:10 genes_not_in_string.txt
+-rw-r--r-- 1 naa79 pi_sz622   905565 Oct 15 13:10 ggi_edges.tsv
+-rw-r--r-- 1 naa79 pi_sz622  3882336 Oct 15 13:10 ggi_graph.npz
+-rw-r--r-- 1 naa79 pi_sz622      327 Oct 15 13:10 PROVENANCE.txt
+== AD feature store
+total 324627990
+drwxr-sr-x 2 naa79 pi_sz622         4096 Oct 15 17:31 .
+drwxr-sr-x 2 naa79 pi_sz622         4096 Oct 15 15:49 ..
+-rw-r--r-- 1 naa79 naa79    332413726568 Oct 15 17:31 feats.f32
+-rw-r--r-- 1 naa79 pi_sz622          693 Oct 15 17:31 feats.meta.json
+-rw-r--r-- 1 naa79 naa79               0 Oct 15 15:49 genes_not_in_order.txt
+-rw-r--r-- 1 naa79 naa79               0 Oct 15 15:49 genes_without_features.txt
+-rw-r--r-- 1 naa79 naa79         5333493 Oct 15 17:28 info.csv
+{
+  "n_samples": 380962,
+  "n_genes": 19831,
+  "n_thresholds": 11,
+  "thresholds": [
+    "1e-5",
+    "1e-4",
+    "1e-3",
+    "0.01",
+    "0.05",
+    "0.1",
+    "0.2",
+    "0.3",
+    "0.4",
+    "0.5",
+    "1"
+  ],
+  "dtype": "float32",
+  "layout": "C order; row = sample (info.csv order), column = gene_index * n_thresholds + threshold_index",
+  "gene_order": "/home/naa79/project_pi_sz622/naa79/prs-benchmark/ref/prsnet/gene_order.txt",
+  "feats": "/home/naa79/project_pi_sz622/naa79/prs-benchmark/data/processed/ad/eur/prsnet/genome/ad_eur/feats.f32",
+  "per_sample_dir": null,
+  "info": "/home/naa79/project_pi_sz622/naa79/prs-benchmark/data/processed/ad/eur/prsnet/genome/ad_eur/info.csv"
+}== author splits
+== training runs
+== last training jobs

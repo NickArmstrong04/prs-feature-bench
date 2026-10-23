@@ -1,0 +1,21 @@
+# Read-only snapshot of production PRS-Net scripts, copied 2026-10-23 from /home/naa79/project_pi_sz622/naa79/prs-benchmark/scripts/slurm
+# Production is the source of truth; edit there, re-snapshot here. Never edit these copies.
+
+1a4d1a3f098d571dafeca99513b72487  09_evaluate.py
+a97d219de4313ae2fa3c97b5a1069a51  09_evaluate.sh
+62c9de8a270ba91822b253b84c233b10  12_prsnet.py
+780d7a5afb93649305056919485e188c  12_prsnet.sh
+431d1b113855e8562f22a595e4a0f3cf  13_prsnet_train.sh
+051dec9b089a71f1f065032d2255bf95  14_ld_leakage.py
+af92ab82764965bd15137a7fc3a93d8a  build_ggi_from_string.py
+ea1522de099501d2d0d517d7e3d1ce8e  config.sh
+41b8b9f5ade8bd6e5bbb04b090c21e9f  make_author_splits.py
+7b1f6c53ae12d8bae26cb74083f141bf  MANIFEST.txt
+27fecee57c2b62ce0f546718709b9583  prsnet_ld.py
+faa08667cdd407236c1739f34895b34e  prsnet_to_eval.py
+e1a29330bbb0d4a437035b4b71f971be  prsnet_torch.py
+5216c5a89dd565036b253d96ab8ab200  run_author_splits.sh
+5ae0f5212b2f252689996600994d07de  run_prsnet.sh
+8bf6b00cbadac420f3ebe5f818a70646  submit_12b_split.sh
+ddcfab1da59949413e6392aad6bf8930  test_prsnet_torch.py
+8376708b6180bb9d246449b01b5b109f  train_prsnet.py
