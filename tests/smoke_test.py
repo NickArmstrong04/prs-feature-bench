@@ -468,7 +468,10 @@ for c in (1, 2):
     shutil.copytree(f"{W}/dos_pack_1", f"{MD}/chr{c}")
     g2t = open(f"{MD}/chr{c}/gene2snps.tsv").read().replace("CG", f"C{c}G")        # distinct gene names per shard
     open(f"{MD}/chr{c}/gene2snps.tsv", "w").write(g2t)
-print(run(PY + [f"{B}/port/merge_shards.py", MD, "--chrs", "1-2"]).strip())
+open(f"{W}/pheno.tab", "w").write("".join(f"F{i} I{i} {1 + (i % 3 == 0)}\n" for i in range(ns)))
+print(run(PY + [f"{B}/port/merge_shards.py", MD, "--chrs", "1-2", "--pheno", f"{W}/pheno.tab"]).strip())
+info = open(f"{MD}/info.csv").read().splitlines(); assert info[0] == "sample_id,label,ancestry" and len(info) == 1 + ns
+assert info[1:4] == ["I0,1,EUR", "I1,0,EUR", "I2,0,EUR"], info[1:4]
 sh_rows = [l.split("\t") for l in open(f"{MD}/shards.tsv").read().splitlines()[1:]]
 assert [(r[0], int(r[2]), int(r[3])) for r in sh_rows] == [("1", len(sel), 0), ("2", len(sel), len(sel))]
 mg = pickle.load(open(f"{MD}/gene2snps.pkl", "rb"))

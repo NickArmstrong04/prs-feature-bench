@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """merge_shards.py -- genome-wide index over per-chromosome dosage shards.
 
-    python merge_shards.py <out_dir> [--chrs 1-22]
+    python merge_shards.py <out_dir> [--chrs 1-22] [--pheno <FID IID PHENO> --ancestry EUR]
 
 Reads <out_dir>/chr<k>/{samples.txt,snps.tsv,pvalues.npy,gene2snps.tsv} written
 by dosage_pack.py (or dosage_raw.py) and writes in <out_dir>:
@@ -10,6 +10,8 @@ by dosage_pack.py (or dosage_raw.py) and writes in <out_dir>:
     snps.tsv         col snp a1 bp p chr, genome-wide column numbering
     pvalues.npy      float64 (total_snps,)
     gene2snps.tsv    gene n_snps snps   and  gene2snps.pkl  gene -> genome-wide column indices
+    info.csv         sample_id,label,ancestry in shard row order (with --pheno; PHENO 1/2 -> label 0/1),
+                     the file train_prsnet.py's FeatureStore takes its labels and splits from
 A gene on two chromosomes' lists (should not happen) is an error.
 The shard files themselves are left where they are; the trainer opens them with
     X = x2bit.Sharded([(path, n) for path, n in shards])
@@ -29,6 +31,8 @@ def parse_chrs(s):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out_dir"); ap.add_argument("--chrs", default="1-22")
+    ap.add_argument("--pheno", default=None, help="FID IID PHENO (1 control / 2 case) -> info.csv")
+    ap.add_argument("--ancestry", default="EUR")
     a = ap.parse_args()
     chrs = parse_chrs(a.chrs)
     samples = None; shards = []; snps = []; pv = []; g2 = {}; off = 0
@@ -77,6 +81,20 @@ def main():
         for g in sorted(g2c):
             w.write(f"{g}\t{len(g2c[g])}\t" + ",".join(snps[j][0] for j in g2c[g]) + "\n")
     n = len(samples.splitlines())
+    if a.pheno:
+        ph = {}
+        for l in open(a.pheno):
+            f = l.split()
+            if len(f) >= 3 and f[2] in ("1", "2"):
+                ph[f[1]] = int(f[2]) - 1
+        with open(os.path.join(a.out_dir, "info.csv"), "w") as w:
+            w.write("sample_id,label,ancestry\n")
+            for l in samples.splitlines():
+                iid = l.split()[1]
+                if iid not in ph:
+                    sys.exit(f"{iid} has no 1/2 phenotype in {a.pheno}")
+                w.write(f"{iid},{ph[iid]},{a.ancestry}\n")
+        print(f"info.csv: {n} rows, {sum(ph[l.split()[1]] for l in samples.splitlines())} cases")
     print(f"merged {len(shards)} shards: {n} people x {off} SNPs, {len(g2c)} genes, "
           f"{sum(len(v) for v in g2c.values())} links; packed {n * sum((m + 3) // 4 for _, _, m, _ in shards) / 1e9:.1f} GB -> {a.out_dir}")
 
