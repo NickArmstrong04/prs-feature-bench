@@ -647,3 +647,19 @@ The **bed layout** (third layout of `run_variant.sh`, detected by `geno.bed`):
 `geno.bed/.bim/.fam` in the output dir, compared by `compare_bed.py` exactly
 (fam fields, bim rows, every genotype byte; differing variants are named with
 the number of differing people and whether their `.bim` alleles are swapped).
+
+**First Bouchet runs (2026-10-23, commit 7275089, 4 threads, same salloc).**
+`ref_bed` stored `fixture_20k/golden/bed` and `fixture_100k/golden/bed`;
+`bed_seek_v0` reproduced both byte for byte: rows `20261023_180041` (20,000
+people, wall 48.9 s, cpu 96 s, RSS 1001 MB) and `20261023_180139` (100,000
+people, 52.9 s, cpu 116 s, 1048 MB), "all 156485 variants identical". Full
+cohort chr19 (`runs/bed_full/chr19`, 156,485 × 380,962 = 14.9 GB): 76 s wall
+(read 57.7 s, decode 72.2, gather 60.3, pack 48.9, write 44.5 summed over 4
+workers; 78,817 reads, 1.19× over-read, 22.8 GB in) against production 12a's
+`ad_eur_pnet_12a_c19` at **11 min 37 s on 4 CPUs / 32 GB** (sacct), ~9×.
+Then plink `--clump` with 12b's flags on the new bed for the ten chr19 genes
+with the most index SNPs (ERICH4 22,022 lines … KDM4B 154) gave `.clumped`
+files identical to production's. chr19's plink log has 0 "Impossible A1"
+warnings, so the minor-allele fallback is still untested on real data; chr10
+(594 of them) is the test. The 4 h 10 min quoted for 12a was the whole array,
+not one chromosome; the per-stage baseline comes from `sacct | grep pnet`.
