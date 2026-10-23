@@ -488,9 +488,14 @@ not touched here). Run on Bouchet 2026-10-23, results below. The pieces:
   the trainer's view of the merged directory, shaped like `train_prsnet.py`'s
   `FeatureStore`: `.n .m .labels .sample_ids`, `.rows(idx)` → float32 torch
   with missing (3) → 0 as the authors' `src/dataset.py` does, `.rows_int8(idx)`.
-  `load="ram"` holds the packed genome as one (n, 21,620) uint8 array (8.2 GB
+  `load="ram"` holds the packed genome as one (n, 21,611) uint8 array (8.2 GB
   for ad/eur) so a batch is a row gather plus 22 shift-or unpacks;
-  `load="memmap"` leaves the shards on disk. `.model_inputs()` gives
+  `load="memmap"` leaves the shards on disk. On `runs/port_timed` (memmap, in
+  the salloc, cold NFS): opened in 2 s, three random rows match
+  `x2bit.Sharded`, `model_inputs` gives 19,831 nodes, 9,721 genes with SNPs,
+  199,019 snp_ids (gene_ids start 2, 5, 7 = A2M, A4GALT, AAAS); a 512-person
+  batch took 14.4 s because it is 512 × 22 random row reads off NFS — the
+  memmap mode is for evaluation passes, training uses `load="ram"`. `.model_inputs()` gives
   `PRSNet2(...)` its `n_snps, n_genes, gene_ids, gene2snp_len, snp_ids,
   pvalues` with `gene_ids` = node indices from `gene_order.txt`, ascending,
   exactly as the authors' `train.py` sorts `gene2snps` by key. `--export <dir>`
