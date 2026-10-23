@@ -37,8 +37,14 @@ awk 'NR==FNR {u[$2]; next} ($2 in u) {print $2}' "$W/pairs.tsv" "$FIX/geno.bim" 
 echo "linked: $(cut -f1 "$W/pairs.tsv" | sort -u | wc -l) genes, $(wc -l < "$W/pairs.tsv") gene-SNP links, $(wc -l < "$W/sel.snplist") SNPs selected  ($(date +%T))"
 [[ -s "$W/sel.snplist" ]] || { echo "no SNPs selected"; exit 1; }
 
-# --- genotypes as text: one column per SNP, counts of A1, NA = missing
-plink --bfile "$FIX/geno" --extract "$W/sel.snplist" --recode A --out "$W/raw" \
+# --- genotypes as text: one column per SNP, counts of the .bim A1, NA = missing.
+# plink 1.9 re-labels A1 as the minor allele when it writes a new fileset
+# (first Bouchet run: "column rs72984410 counts C, .bim A1 is T"), so the
+# counted allele is given explicitly (--recode-allele: SNP allele per line)
+# and the .bim order kept; dosage_from_raw.py still checks every column.
+awk '{print $2, $5}' "$FIX/geno.bim" > "$W/a1.txt"
+plink --bfile "$FIX/geno" --extract "$W/sel.snplist" --keep-allele-order \
+      --recode A --recode-allele "$W/a1.txt" --out "$W/raw" \
       --memory 8000 --threads "$NT" > "$W/plink.log" 2>&1 || { tail -n 20 "$W/plink.log"; exit 1; }
 echo "plink --recode A done  ($(date +%T))"
 

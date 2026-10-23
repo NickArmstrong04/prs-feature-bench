@@ -308,14 +308,19 @@ For the eQTL path, starting from `eqtl_sparse_v0`:
    backfill on this account.
 5. For the C+T path the same list applies to 12c, plus A1/A4 from
    `prsnet_features.md` (one LD table per chromosome; per-bin sums + counts).
-   **Kernel side, pending: `ct_sparse_v4`** = ct_sparse_v3's run.sh (12b
-   clumping unchanged) with eqtl_sparse_v3's kernel in `--mode ct`, plus genes
-   position-sorted in ct mode too (the manifest order is not positional and
-   the GEMM kernel's blocks are runs of whole genes). Smoke test 22 PASSES
-   against the ct brute force with the same (gene, channel, n_snps) set as
-   v0; column order differs, which the contract allows. Expect the kernel
-   line to fall from ~11–13 s toward 7 s; the wall stays dominated by 12b's
-   ~1,500 plink processes, which is the A1 item.
+   ~~**Kernel side: `ct_sparse_v4`** = ct_sparse_v3's run.sh (12b clumping
+   unchanged) with eqtl_sparse_v3's kernel in `--mode ct`, plus genes
+   position-sorted in ct mode too.~~ **Done, PASS but not a win** (fixture_20k,
+   2 threads, row `20261023_125813` vs ct_sparse_v3 rows `20261022_130215`,
+   `20261021_184355`): bit-identical to golden/ct; wall 1:20.07 vs 1:26.41 /
+   1:31.67 is clumping noise, the kernel is 13.7 s vs 10.7 / 12.9 s (read 0.7,
+   decode+impute 7.0, gemm 1.5, write 2.1), and peak RSS 4970 MB vs 1952 MB.
+   Two reasons, both ct-specific: the per-gene decode re-reads 1.81× the
+   unique SNPs (79,639 row decodes for 43,888 index SNPs) where v3 decoded
+   each block once, and the per-gene buffers are sized by the largest gene,
+   which on chr19 is the giant-window ERICH4 (113,666 window SNPs). The
+   per-gene GEMM kernel stays the eQTL choice; `ct_sparse_v3` stays best for
+   C+T.
    **A1 shelved (2026-10-22):** the target model turned out to be PRSNet-2,
    whose inputs need no clumping at all (§9). The C+T path stays as is unless
    the original PRSNet is wanted too.
@@ -368,4 +373,16 @@ Variants: `ref_dosage` (awk selection + plink 1.9 `--recode A` +
 (`variants/dosage_v0/dosage.py`, one Python pass). Knobs: `PTHR` (default
 0.01), `BLOCK` (selected SNPs per decode block, 4000). Smoke tests 23–24
 cover both against a brute-force `bed-reader` read and `compare_dosage.py`'s
-PASS/FAIL behaviour. Bouchet runs pending.
+PASS/FAIL behaviour.
+
+First Bouchet runs (fixture_20k, 2 threads, commit d7909c0): both select the
+same 5,078 SNPs (P < 0.01: 5,365 in `SNP.pvalue`, 287 not in the `.bim`),
+838 of 1,525 genes, 10,421 gene-SNP links. `dosage_v0` (row `20261023_125956`)
+wrote the 20,000 × 5,078 int8 matrix in 1.32 s wall (select 0.4 s, read 0.2,
+decode 0.1, write 0.5), peak RSS 1010 MB because a 4,000-SNP block's span
+covers almost the whole chromosome (156,359 rows read for 5,078 selected,
+30.8×; a later variant should split spans at large row gaps). `ref_dosage`
+(row `20261023_125954`) failed its own allele check: plink 1.9 re-labels A1
+as the minor allele when writing a new fileset, so `--recode A` counted the
+other allele for rs72984410. Fixed with `--keep-allele-order` and an explicit
+`--recode-allele` list taken from the `.bim`; golden/dosage not yet made.
