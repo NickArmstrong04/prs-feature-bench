@@ -601,4 +601,27 @@ run(PY + [f"{B}/variants/bed_seek_v0/bed_seek.py", "--raw", f"{BS}/raw/r", "--ex
           "--a1", f"{BS}/a1.txt", "--out", f"{BS}/err/geno", "--unassignable", "error"], ok=1)
 print("31. bed_seek_v0 + v1 (same bytes): plink --keep/--extract/--a1-allele/--make-bed rules reproduced (raw order, swaps, minor-allele default, complement mode); compare_bed PASS/FAIL  OK")
 
+# lib/feats_extract.py: a synthetic 12d feats.f32 (gene_order of 7 genes, 3 thresholds) -> scores layout for 3 of them
+import json
+FE = f"{W}/feats"; os.makedirs(FE, exist_ok=True)
+n_fe, G_fe, T_fe = 50, 7, 3; thr_fe = ["1e-3", "0.05", "1"]
+order_fe = [f"G{i}" for i in range(G_fe)]; open(f"{FE}/gene_order.txt", "w").write("".join(g + "\n" for g in order_fe))
+feats = rng.random((n_fe, G_fe * T_fe), dtype=np.float32); feats.tofile(f"{FE}/feats.f32")
+open(f"{FE}/info.csv", "w").write("sample_id,label,ancestry\n" + "".join(f"S{i},{i % 2},EUR\n" for i in range(n_fe)))
+json.dump({"n_samples": n_fe, "n_genes": G_fe, "n_thresholds": T_fe, "thresholds": thr_fe, "gene_order": f"{FE}/gene_order.txt",
+           "feats": f"{FE}/feats.f32", "info": f"{FE}/info.csv"}, open(f"{FE}/feats.meta.json", "w"))
+open(f"{FE}/genes.txt", "w").write("G5\nG0\nG3\n")
+open(f"{FE}/gene_counts.tsv", "w").write("gene\tn_index\tn_P<=1e-3\tn_P<=0.05\tn_P<=1\nG5\t9\t1\t4\t9\nG0\t0\t0\t0\t0\n")
+run(PY + [f"{B}/lib/feats_extract.py", "--meta", f"{FE}/feats.meta.json", "--genes", f"{FE}/genes.txt", "--out", f"{FE}/out",
+          "--gene-counts", f"{FE}/gene_counts.tsv", "--rows", "7"])
+got = np.fromfile(f"{FE}/out/scores.f32", dtype=np.float32).reshape(n_fe, 9)
+exp = np.concatenate([feats[:, g * T_fe:(g + 1) * T_fe] for g in (5, 0, 3)], axis=1)
+assert np.array_equal(got, exp), "extracted columns differ"
+cols = [l.split("\t") for l in open(f"{FE}/out/columns.tsv").read().splitlines()[1:]]
+assert [c[1] for c in cols] == ["G5"] * 3 + ["G0"] * 3 + ["G3"] * 3 and [c[2] for c in cols[:3]] == ["P<=1e-3", "P<=0.05", "P<=1"]
+assert [c[3] for c in cols] == ["1", "4", "9", "0", "0", "0", "0", "0", "0"]
+assert open(f"{FE}/out/samples.txt").read().splitlines()[:2] == ["S0\tS0", "S1\tS1"]
+line = run(PY + [f"{B}/compare.py", f"{FE}/out", f"{FE}/out", "--rtol", "1e-5", "--atol", "1e-7"]).splitlines()[-1]; assert line.startswith("PASS"), line
+print("32. feats_extract: gene columns cut out of a 12d feats.f32 in chunks, labels/counts/samples as the scores layout  OK")
+
 print("\nALL SMOKE TESTS PASSED")
