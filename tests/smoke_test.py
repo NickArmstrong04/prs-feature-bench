@@ -414,6 +414,14 @@ raw2 = f"{W}/rawrel2"
 ord_sids = sid + [f"19:{900000 + i}" for i in range(n_extra_s)]
 G2 = np.stack([Graw[:, rs[s]] for s in ord_sids], axis=1)
 ra1b = [ra1[rs[s]] for s in ord_sids]; ra2b = [ra2[rs[s]] for s in ord_sids]
+# every third shared SNP is stored on the other strand in this release (both alleles complemented, same codes):
+# the counted allele must then be matched through its complement, as step 03's mismatch.R convention implies
+COMP = {"A": "T", "T": "A", "C": "G", "G": "C"}
+n_strand = 0
+for j, s in enumerate(ord_sids):
+    if s in raw_flip and sid.index(s) % 3 == 0 and COMP[ra1b[j]] != ra2b[j]:   # skip palindromic pairs (A/T, C/G)
+        ra1b[j], ra2b[j] = COMP[ra1b[j]], COMP[ra2b[j]]; n_strand += 1
+assert n_strand > 10
 to_bed(raw2 + ".bed", G2, properties={"fid": [f"F{p[1:]}" if p[0] == "I" else "FX" for p in raw_people], "iid": raw_people,
                                       "sid": ord_sids, "chromosome": ["19"] * len(ord_sids),
                                       "bp_position": [int(s.split(":")[1]) for s in ord_sids], "allele_1": ra1b, "allele_2": ra2b})

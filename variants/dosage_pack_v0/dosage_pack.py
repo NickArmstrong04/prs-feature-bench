@@ -103,15 +103,26 @@ def main():
     rrows = rr_fix[order]                                 # raw rows, ascending
     outcol = order                                        # fixture column of each raw-ordered row
     same_order = bool(np.all(np.diff(outcol) == 1))
-    flip = np.zeros(M, dtype=bool)                        # per raw-ordered row
+    # orientation per raw-ordered row. The counted allele (target A1) is matched to
+    # the raw alleles directly, else on the other strand (step 03's mismatch.R
+    # complements strand-flipped target SNPs; the raw release still holds the
+    # original strand): a1 == comp(raw A1) counts raw A1, a1 == comp(raw A2) counts
+    # raw A2. Anything else is an error (mismatch.R should have excluded it).
+    COMP = {"A": "T", "T": "A", "C": "G", "G": "C"}
+    flip = np.zeros(M, dtype=bool)
+    n_strand = 0
     for j, c in enumerate(outcol):
-        r = int(rows_fix[c]); s = sid[r]; ra1, ra2 = raw_al[s]
-        if a1[r] == ra1:
+        r = int(rows_fix[c]); s = sid[r]; ra1, ra2 = raw_al[s]; x = a1[r]
+        if x == ra1:
             pass
-        elif a1[r] == ra2:
+        elif x == ra2:
             flip[j] = True
+        elif COMP.get(x) == ra1:
+            n_strand += 1
+        elif COMP.get(x) == ra2:
+            flip[j] = True; n_strand += 1
         else:
-            raise SystemExit(f"{s}: fixture A1 {a1[r]} is neither raw allele ({ra1}, {ra2})")
+            raise SystemExit(f"{s}: counted allele {x} is neither raw allele ({ra1}, {ra2}) nor their complement")
     pos = {p: i for i, p in enumerate(raw_fam)}
     try:
         keep = np.asarray([pos[p] for p in fam], dtype=np.int64)
@@ -119,7 +130,7 @@ def main():
         raise SystemExit(f"fixture person {e} not in the raw .fam")
     n = len(keep)
     T["select"] = time.time() - t0
-    print(f"raw: {m_raw} variants x {n_raw} people; {M} rows wanted ({int(flip.sum())} flipped to the fixture A1), "
+    print(f"raw: {m_raw} variants x {n_raw} people; {M} rows wanted ({int(flip.sum())} flipped to the counted allele, {n_strand} matched on the other strand), "
           f"{n} people kept ({'same order' if bool(np.all(np.diff(keep) > 0)) else 'reordered'}); "
           f"raw SNP order {'= fixture order' if same_order else 'differs from fixture order (columns scattered on write)'}", flush=True)
 

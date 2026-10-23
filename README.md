@@ -491,8 +491,13 @@ not yet run on Bouchet:
 chromosomes at a time, ad/eur 380,962 people).** The chr19 dry run PASSED
 against `fixture_20k/golden/dosage` with the fixture's 20,000 people matched
 by IID inside the cohort (380,962 × 5,078, 14.6 s kernel). 21 of 22
-chromosomes then completed; chr10 exited 1 before its `raw:` line (being
-looked at). Kernel times per chromosome: chr1 31.2 s (8,554 SNPs, 17.7 s of
+chromosomes then completed; chr10 stopped at rs2201904: the counted allele
+(target A1 = A) is neither raw allele (C/T) — a strand flip. Step 03's
+`mismatch.R` complements such target SNPs; the raw release keeps the original
+strand, so `dosage_pack.py` now matches the counted allele through its
+complement as well (A→T etc.), reports how many SNPs were matched that way,
+and still errors on anything else. Smoke test 27's synthetic release stores
+every third shared SNP on the other strand. Kernel times per chromosome: chr1 31.2 s (8,554 SNPs, 17.7 s of
 seeks), chr5 23.2, chr11 22.1, chr6 21.6, chr8 20.5, chr7 20.4, chr2 19.4,
 chr17 18.3, chr19 16.3, chr3 15.8 … chr21 2.5 s; **302 s of kernel in total
 for the 21**, reads 60–70 % of it, so ~5 min of wall at two at a time
