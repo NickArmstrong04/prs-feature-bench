@@ -408,6 +408,19 @@ when the raw order differs (then the block write is a column scatter). The
 smoke test feeds it a shuffled raw release with extra people and SNPs and half
 the shared SNPs on the other allele; it reproduces dosage_v0 cell for cell.
 This is the one variant that reads outside the fixture, read-only, by design.
+**Done, PASS at both sizes** (commit 8381c8c, 2 threads; rows
+`20261023_140043` 20k, `20261023_140053` 100k): identical to golden/dosage
+made from the 12a cohort bed. Wall 8.48 s / 8.72 s, RSS 471 / 1094 MB. The
+raw chr19 is 624,503 variants × 487,409 people (121,853 bytes per row); the
+5,078 wanted rows were read as 5,574 rows in ~3,960 reads, 679 MB, in 4.2 s
+cold (0.2 s on the second run, page cache), 2,094 of them flipped to the
+fixture A1. Decode of all 487k people 2.1–4.2 s, gather 0.4–1.0 s, write
+0.6 / 2.2 s. So the 12a pass for this feature set — 4 h 10 min for the
+genome — becomes ~10 s per chromosome, and the read volume genome-wide is
+(selected SNPs × 122 KB), tens of GB in total. In production the `snps`
+sub-step of 12a (per-gene snplists from the windows, `gwas.QC.txt` and step
+04's `.PH.bim`, with the giant-window cap) is still needed; it is Python
+and cheap. plink is not needed at all on this path.
 
 **Goal for this path (set 2026-10-23):** training takes ~3 h regardless, so
 the feature build should take minutes. The baseline is the ad/eur PRS-Net
