@@ -641,4 +641,63 @@ assert open(f"{FE}/out/samples.txt").read().splitlines()[:2] == ["S0\tS0", "S1\t
 line = run(PY + [f"{B}/compare.py", f"{FE}/out", f"{FE}/out", "--rtol", "1e-5", "--atol", "1e-7"]).splitlines()[-1]; assert line.startswith("PASS"), line
 print("32. feats_extract: gene columns cut out of a 12d feats.f32 in chunks, labels/counts/samples as the scores layout  OK")
 
+# clump_np_v0: ld_pairs (pairwise-deletion r^2 >= 0.5 within kb, exact) + clump_genes (P-ordered greedy) == brute force
+CL = f"{W}/clump"; os.makedirs(f"{CL}/genes", exist_ok=True)
+nc, mc = 200, 60
+hap = rng.integers(0, 3, size=(nc, 6)).astype(float)                     # 6 templates; SNPs are noisy copies -> LD blocks
+Gc = np.empty((nc, mc))
+for j in range(mc):
+    base = hap[:, j % 6].copy(); noise = rng.random(nc) < [0.0, 0.1, 0.25, 0.5][j % 4]
+    base[noise] = rng.integers(0, 3, size=int(noise.sum())); Gc[:, j] = base
+Gc[rng.random(Gc.shape) < 0.05] = np.nan                                # 5% missing
+Gc[:, 7] = 1.0                                                           # a monomorphic SNP: no r^2 with anything
+sidc = [f"rs{j}" for j in range(mc)]; bpc = [1000 + 10 * j for j in range(mc)]
+to_bed(f"{CL}/geno.bed", Gc.astype(np.float32), properties={"fid": [f"F{i}" for i in range(nc)], "iid": [f"I{i}" for i in range(nc)],
+       "sid": sidc, "chromosome": ["19"] * mc, "bp_position": bpc, "allele_1": ["A"] * mc, "allele_2": ["G"] * mc})
+KB = 0.1                                                                 # 100 bp window = +-10 SNPs
+Pc = rng.random(mc); Pc[12] = Pc[13]                                     # one tie, decided by position
+open(f"{CL}/SNP.pvalue", "w").write("SNP P\n" + "".join(f"{sidc[j]} {float(Pc[j])!r}\n" for j in range(mc) if j != 40))   # rs40 has no P
+# brute-force r^2 with pairwise deletion, in float64 straight from the genotypes
+def r2_bf(x, y):
+    ok = ~np.isnan(x) & ~np.isnan(y); x, y = x[ok], y[ok]; n = len(x)
+    if n < 2: return 0.0
+    num = (n * (x * y).sum() - x.sum() * y.sum()) ** 2; den = (n * (x * x).sum() - x.sum() ** 2) * (n * (y * y).sum() - y.sum() ** 2)
+    return num / den if den > 0 else 0.0
+pairs_bf = {(i, j) for i in range(mc) for j in range(i + 1, mc) if abs(bpc[i] - bpc[j]) <= 100 and r2_bf(Gc[:, i], Gc[:, j]) >= 0.5}
+assert 20 < len(pairs_bf) < 400, len(pairs_bf)
+run(PY + [f"{B}/variants/clump_np_v0/ld_pairs.py", "--bed", f"{CL}/geno", "--out", f"{CL}/pairs.npz", "--kb", str(KB), "--r2", "0.5", "--block", "7", "--threads", "1"])
+z = np.load(f"{CL}/pairs.npz"); pairs_np = set(zip(z["i"].tolist(), z["j"].tolist()))
+assert pairs_np == pairs_bf, f"ld_pairs: {len(pairs_np - pairs_bf)} extra, {len(pairs_bf - pairs_np)} missing"
+for i_, j_, r_ in zip(z["i"], z["j"], z["r2"]):
+    assert abs(float(r_) - r2_bf(Gc[:, i_], Gc[:, j_])) < 1e-6
+# genes: 8 random windows of SNPs, one with no SNPs; greedy brute force on the same graph
+adj = {k: set() for k in range(mc)}
+for i_, j_ in pairs_bf: adj[i_].add(j_); adj[j_].add(i_)
+with open(f"{CL}/gene_manifest.tsv", "w") as man:
+    man.write("gene\tstart\tend\tn_snps\tbig\n")
+    truth_c = {}
+    for g in range(8):
+        js = sorted(rng.choice(mc, size=int(rng.integers(5, 30)), replace=False)) if g != 3 else []
+        man.write(f"C{g}\t0\t0\t{len(js)}\t0\n")
+        open(f"{CL}/genes/C{g}.snplist", "w").write("".join(sidc[j] + "\n" for j in js))
+        S = [j for j in js if j != 40]; order = sorted(S, key=lambda j: (Pc[j], j)); clumped = set(); idx = []
+        for j in order:
+            if j in clumped: continue
+            idx.append(j); clumped |= {k for k in adj[j] if k in S} | {j}
+        truth_c[f"C{g}"] = set(sidc[j] for j in idx)
+out = run(PY + [f"{B}/variants/clump_np_v0/clump_genes.py", "--pairs", f"{CL}/pairs.npz", "--genes-dir", f"{CL}/genes", "--manifest", f"{CL}/gene_manifest.tsv",
+                "--pvalue", f"{CL}/SNP.pvalue", "--out", f"{CL}/clumps", "--clumps-tsv", f"{CL}/clumps.tsv", "--chr", "19"])
+got_c = {l.split("\t")[0]: set(l.rstrip("\n").split("\t")[2].split(",")) - {""} for l in open(f"{CL}/clumps.tsv").read().splitlines()[1:]}
+assert got_c == truth_c, {g: (sorted(truth_c[g] ^ got_c.get(g, set()))) for g in truth_c if truth_c[g] != got_c.get(g)}
+assert sum(len(v) for v in truth_c.values()) < sum(len(l.split()) for g in range(8) for l in open(f"{CL}/genes/C{g}.snplist")), "clumping removed nothing"
+man_c = [l.split("\t") for l in open(f"{CL}/clumps/clump_manifest.tsv").read().splitlines()]
+assert man_c[0][-2:] == ["n_index", "status"] and [r[-1] for r in man_c[1:]] == ["ok"] * 3 + ["nosnp"] + ["ok"] * 4
+# the .clumped files feed clumped_to_tsv / make_ct_weights unchanged (SNP in column 3), and compare_clumps judges sets
+run(PY + [f"{B}/lib/clumped_to_tsv.py", f"{CL}/clumps", f"{CL}/clumps/clump_manifest.tsv", f"{CL}/clumps_rt.tsv"])
+line = run(PY + [f"{B}/compare_clumps.py", f"{CL}/clumps.tsv", f"{CL}/clumps_rt.tsv"]).splitlines()[-1]; assert line.startswith("PASS"), line
+bad_c = open(f"{CL}/clumps.tsv").read().replace(f"\t{len(truth_c['C0'])}\t", f"\t{len(truth_c['C0'])}\tZZZ,", 1)
+open(f"{CL}/clumps_bad.tsv", "w").write(bad_c)
+txt = run(PY + [f"{B}/compare_clumps.py", f"{CL}/clumps.tsv", f"{CL}/clumps_bad.tsv"], ok=2); assert "1 differ" in txt and "ZZZ" in txt, txt
+print("33. clump_np_v0: ld_pairs == brute-force pairwise-deletion r^2 (exact), clump_genes == P-ordered greedy (tie by position, SNP without P skipped, monomorphic SNP); compare_clumps  OK")
+
 print("\nALL SMOKE TESTS PASSED")

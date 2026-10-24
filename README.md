@@ -27,6 +27,7 @@ prs-feature-bench/
 ├── compare.py              fidelity check: golden vs candidate, scores layout
 ├── compare_dosage.py       exact check for the dosage layout (PRSNet-2 features, §9)
 ├── compare_bed.py          exact check for the bed layout (12a's cohort .bed, §11)
+├── compare_clumps.py       exact check for the clumps layout (12b's index SNPs per gene, §11)
 ├── results.tsv             append-only log (created by the first run)
 ├── fixture/                the data (not in git; ~200 MB)
 ├── golden/<name>/          reference outputs (not in git)
@@ -52,7 +53,9 @@ prs-feature-bench/
     ├── ref_bed/            reference: the fixture's own plink-made bed -> golden/bed (§11)
     ├── bed_seek_v0/        12a's cohort .bed by seeking the raw release, no plink (§11)
     ├── bed_seek_v1/        v0 with a fused gather+pack kernel (§11)
-    └── ct_sparse_v5/       ct_sparse_v3 writing 12c's chunk layout (§11)
+    ├── ct_sparse_v5/       ct_sparse_v3 writing 12c's chunk layout (§11)
+    ├── ref_clump/          reference: 12b's per-gene plink --clump -> golden/clumps (§11)
+    └── clump_np_v0/        12b without plink: one LD pass per chromosome + greedy per gene (§11)
 ```
 
 `.gitignore` should hold `fixture/ golden/ runs/ lib/ref_12_prsnet.py`.
@@ -813,3 +816,32 @@ write-bound: 25.6 GB per chromosome at ~160 MB/s, the same bytes 12c wrote
 and 12d writes again when it assembles `feats.f32` (332 GB, 0.4 h). A
 scorer that writes `feats.f32` once, in people-row blocks across all
 chromosomes, would save one of the two 332 GB writes.
+
+**12b without plink: `clump_np_v0`.** The facts that make it possible: only
+30 giant genes exist genome-wide, but their windows hold 300k–469k SNPs each
+(SRGAP2B 468,814 of chr1's 545,489; ERICH4's plink log: "22019 clumps formed
+from 113666 top variants"), and every gene on a chromosome clumps a subset of
+the same window SNPs under the same rule, so 12b recomputes the chromosome's
+LD once per gene. `ld_pairs.py` computes it once: every pair within 250 kb
+with r² ≥ 0.5, as a sparse graph. r² is plink's --clump r², the squared
+Pearson correlation of the allele counts over the people with both calls
+present (pairwise deletion); with missing coded 0, Sxy = x·y comes from a
+float32 GEMM that is exact because every sum is an integer below 2²⁴
+(4 × 380,962), the missing corrections (Σx over y-missing etc.) are sparse
+products, and r² is formed in float64 — deterministic, no rounding at the
+0.5 boundary. Blocks of 512 SNPs in position order, each against itself and
+the previous blocks still within reach. `clump_genes.py` then runs plink's
+greedy per gene over the graph restricted to the gene's SNPs (P ascending,
+ties by position, a SNP without P skipped) and writes `<gene>.clumped` (SNP in
+column 3, TOTAL) plus `clump_manifest.tsv`, so `make_ct_weights.py` and the
+scorer run unchanged, and `clumps.tsv` (gene, n_index, index SNPs), the
+bench's **clumps layout** (fifth layout; `compare_clumps.py` compares index
+SETS exactly; `ref_clump` = plink per gene on the fixture → `golden/clumps`;
+`lib/clumped_to_tsv.py` turns production's `.clumped` directories into the
+same file). Smoke test 33: pairs and r² equal a brute force, index sets equal
+a hand-written greedy. Not yet run on Bouchet: the fixture decides whether
+plink's r² and ordering are reproduced; chr19's 1,525 production `.clumped`
+files are the full-cohort golden. Cost model: GEMM-bound, ~2 × n × (pairs
+within reach) flops — chr19 at 380,962 people ≈ 2 × 10¹⁴, 20–30 min on 4
+cores; it replaces the task arrays and the giants together, and scales with
+cores in the submission.

@@ -93,6 +93,9 @@ if [[ -f "$OUT/X.npy" || -f "$OUT/X2.npy" ]]; then
 elif [[ -f "$OUT/geno.bed" ]]; then                             # third layout: a PLINK fileset (12a's cohort bed, README s11)
     LAYOUT=bed; FILES="geno.bed geno.bim geno.fam"
     CMP=compare_bed.py; CMP_ARGS=(); BULK=geno.bed; COLF=geno.bim
+elif [[ -f "$OUT/clumps.tsv" ]]; then                           # fifth: 12b's clumps (gene, n_index, index SNPs; README s11)
+    LAYOUT=clumps; FILES="clumps.tsv"
+    CMP=compare_clumps.py; CMP_ARGS=(); BULK=clumps.tsv.none; COLF=clumps.tsv
 elif [[ -f "$OUT/scores_manifest.tsv" ]]; then                  # fourth: 12c's chunk layout (ct_sparse_v5, README s11)
     LAYOUT=chunks; FILES="samples.txt scores_manifest.tsv gene_counts.tsv"
     CMP=compare.py; CMP_ARGS=(--rtol "${BENCH_RTOL:-1e-5}" --atol "${BENCH_ATOL:-1e-7}"); BULK="scores_chunk*.npy"; COLF=gene_counts.tsv
