@@ -1003,3 +1003,27 @@ leakage at the readout. Predictions from the diagnostic: `ct-unique` helps
 little (it touches 10 % of adjacent pairs), `ldpred2` more, both more on T2D
 (sd 0.002) than AD (sd 0.013); the genome-wide LDpred2 − C+T gap is +0.006 on
 AD and +0.057 on T2D.
+
+**Fixture verification (2026-10-24, commit ab5327a, ad/eur chr19, 2,000 people,
+4 threads, worktree `prs-feature-bench-ld`).** All four rows run through
+`run_variant.sh`; `results.tsv` rows `20261024_103352`, `_104200`, `_104458`,
+`_104508`.
+
+| row | run | verdict | what the verdict means |
+|---|---|---|---|
+| `ct` | = `ct_sparse_v5` | PASS vs `golden/ct` (bit-identical, earlier rows) | the control |
+| `ct-unique` | `ct_unique_v0`, 28.7 s | FAIL vs `golden/ct` **by design**: 1,327 of 1,526 genes differ; every differing gene is in `work/assign_report.tsv` (23,634 shared index SNPs reassigned, 1,496 genes touched, **0 genes differ that the rule did not touch**); 169 touched genes identical (they kept the SNP) | the rule changes exactly the shared-SNP genes and nothing else |
+| `ldpred2` (g011) | `ldpred2_v0`, 1.9 s | **PASS** vs `golden/ldpred2_g011` (plink2 `--score` oracle on the same weights): 1,513 cols, 0 bad, max rel 5.0e-6 (plink2 print precision); 13 extra zero columns for genes with no weighted SNP | the kernel's sum mode with the fixed layout reproduces plink2 |
+| `ldpred2-unique` (g011) | `ldpred2_v0`, `LDPRED_MODE=ldpred2-unique`, 1.7 s | FAIL vs `golden/ldpred2_g011` by design: 1,269 of 1,513 genes differ, 13,795 shared SNPs reassigned, 1,470 genes touched, **0 untouched genes differ** | same |
+
+chr19 numbers to keep in mind: 30 % of its index links are shared (23,634 of
+~79k) against 14 % genome-wide — it is the densest gene chromosome (LRC/KIR,
+ZNF arrays, CEACAMs) and the 2k-person LD yields more index SNPs per window.
+The top differing genes under `ldpred2-unique` are PVRL2, APOE, TOMM40,
+APOC1, CLPTM1, APOC2/4: the locus the diagnostic said is written into every
+neighbour, now in one gene each. 41,968 (gene, SNP) links carry a g011 beta on
+chr19 (21,445 HM3+ SNPs, 1,513 of 1,526 genes).
+
+Next: the chain on ad/eur with `CHAIN_FEATURES=ct-unique` and `=ldpred2`
+(`CHAIN_BETA_COL=g011`), 12d with the production `12_prsnet.py --channels`,
+then `14_ld_leakage.py` and `13_prsnet_train.sh` on each store.
