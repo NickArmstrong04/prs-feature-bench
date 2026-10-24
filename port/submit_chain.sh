@@ -56,7 +56,7 @@ while [[ $# -gt 0 ]]; do
 done
 (( DO_CHR == 1 || DO_12D == 1 )) || { echo "--no-12d and --12d-only together leave nothing to submit"; exit 1; }
 ROOT=${ROOT:-/home/naa79/project_pi_sz622/naa79/prs-benchmark}
-BENCH=${BENCH:-$(cd "$(dirname "$0")/.." && pwd)}
+BENCH=$(cd "$(dirname "$0")/.." && pwd)     # this checkout, whatever the shell exports (a worktree submits its own scripts)
 PNET=$ROOT/data/processed/$DISEASE/$COHORT/prsnet
 OUT=${CHAIN_OUT:-/home/naa79/scratch_pi_sz622/naa79/prs-feature-bench/prsnet_chain/${DISEASE}_${COHORT}}
 mkdir -p "$BENCH/logs"
