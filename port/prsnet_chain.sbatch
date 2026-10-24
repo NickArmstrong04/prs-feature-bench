@@ -10,7 +10,8 @@
 #      12c  scores          variants/ct_sparse_v5/sparse_score.py, 12c's chunk layout,
 #                           bit-identical to production feats.f32 on chr19
 #      then the chromosome's bed is deleted (52 GB for chr1; the file system is 99 % full)
-#      12d  assemble        production's 12_prsnet.py assemble, unchanged, after all tasks
+#      12d  assemble        production's 12_prsnet.py assemble (STEP=12d), or the same bytes from
+#                           port/assemble_rows.py as prep -> rows array -> finish (submit_chain.sh)
 #
 #  DRAFT (2026-10-23): assembled from the chr19 full-cohort runs in README s11;
 #  NOT yet run under sbatch. Variable names follow $ROOT/scripts/slurm/config.sh.
@@ -85,19 +86,36 @@ need_module() {
 # -----------------------------------------------------------------------------
 #  12d: production's assembler over this run dir (after all 22 tasks)
 # -----------------------------------------------------------------------------
-if [[ "$STEP" == 12d ]]; then
+#  STEP=12d    production's assembler in one job (~29 min for ad/eur)
+#  STEP=prep / rows / finish   the same bytes from port/assemble_rows.py: prep makes
+#      info.csv and a sparse feats.f32, a CHAIN_PARTS-task array (rows, task = part)
+#      fills contiguous sample slices, finish writes feats.meta.json and, with
+#      CHAIN_CMP=<production feats.f32>, runs cmp. submit_chain.sh chains them.
+if [[ "$STEP" == 12d || "$STEP" == prep || "$STEP" == rows || "$STEP" == finish ]]; then
     for c in $(seq 1 22); do
         [[ -f "$OUT/chr$c/scores/scores_manifest.tsv" ]] || { echo "chr$c has no scores yet: $OUT/chr$c/scores/scores_manifest.tsv"; exit 1; }
     done
     [[ -n "${PHENO:-}" && -f "$PHENO" ]] || { echo "no phenotype for $DISEASE/$COHORT (PHENO unset or missing)"; exit 1; }
     [[ -f "$PRSNET_GENE_ORDER" ]] || { echo "MISSING: $PRSNET_GENE_ORDER"; exit 1; }
     ANC=UNK; [[ "$COHORT" == eur || "$COHORT" == caucasian ]] && ANC=EUR
-    G=$OUT/genome/${DISEASE}_${COHORT}; mkdir -p "$G"
-    echo "== 12d assemble $DISEASE/$COHORT  run-dir $OUT  ->  $G  ($(date))"
-    "$PRSNET_PY" "$PRSNET_SCRIPT" assemble --run-dir "$OUT" --gene-order "$PRSNET_GENE_ORDER" \
-        --pheno "$PHENO" --ancestry "$ANC" --out-dir "$G" --thresholds "$PRSNET_THRESHOLDS" \
-        --export "${PRSNET_EXPORT:-memmap}" --expect-n-genes "$PRSNET_N_GENES" --sample-block 5000
-    lap "12d assemble"
+    G=${CHAIN_GENOME_DIR:-$OUT/genome/${DISEASE}_${COHORT}}; mkdir -p "$G"
+    COMMON=(--run-dir "$OUT" --gene-order "$PRSNET_GENE_ORDER" --pheno "$PHENO" --ancestry "$ANC"
+            --out-dir "$G" --thresholds "$PRSNET_THRESHOLDS" --expect-n-genes "$PRSNET_N_GENES")
+    if [[ "$STEP" == 12d ]]; then
+        echo "== 12d assemble $DISEASE/$COHORT  run-dir $OUT  ->  $G  ($(date))"
+        "$PRSNET_PY" "$PRSNET_SCRIPT" assemble "${COMMON[@]}" --export "${PRSNET_EXPORT:-memmap}" --sample-block 5000
+        lap "12d assemble"
+    else
+        PARTS=${CHAIN_PARTS:-8}
+        ROWS=(--prsnet-script "$PRSNET_SCRIPT" --n-parts "$PARTS" --sample-block "${CHAIN_SAMPLE_BLOCK:-5000}")
+        echo "== 12d/$STEP $DISEASE/$COHORT  run-dir $OUT  ->  $G  parts $PARTS  ($(date))"
+        case "$STEP" in
+            prep)   "$PRSNET_PY" "$BENCH/port/assemble_rows.py" prep "${COMMON[@]}" "${ROWS[@]}" ;;
+            rows)   "$PRSNET_PY" "$BENCH/port/assemble_rows.py" rows "${COMMON[@]}" "${ROWS[@]}" --part "${SLURM_ARRAY_TASK_ID:?rows runs as an array 0-$((PARTS - 1))}" ;;
+            finish) "$PRSNET_PY" "$BENCH/port/assemble_rows.py" finish "${COMMON[@]}" "${ROWS[@]}" ${CHAIN_CMP:+--cmp "$CHAIN_CMP"} ;;
+        esac
+        lap "12d $STEP"
+    fi
     ls -la "$G"
     exit 0
 fi

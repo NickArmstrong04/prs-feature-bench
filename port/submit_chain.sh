@@ -6,6 +6,16 @@
 #  once. Cheap enough for the login node: 22 `wc -l` and one awk per manifest.
 #
 #      bash port/submit_chain.sh <disease> <cohort> [--dry-run] [--chr 1,2,19]
+#             [--no-12d | --12d-only] [--parts 8] [--cmp /prod/feats.f32] [--genome-dir DIR]
+#
+#  After the chromosome jobs it chains 12d as three dependent steps of
+#  port/assemble_rows.py (prep -> rows array of --parts tasks -> finish), so one
+#  command takes a cohort from nothing to feats.f32; --12d-only runs just those
+#  three on an existing run dir, --cmp makes finish cmp the result against a
+#  file, --genome-dir puts the output elsewhere than $CHAIN_OUT/genome/<d>_<c>.
+#  Rows jobs: production's single 12d took 1737 s / 32 GB (memmap pages); a part
+#  holds one 5000-sample block (4.4 GB) plus the chunk slices it reads, so 12 GB,
+#  2 CPUs, time 2 x 1.3 x 1737/parts + 5 min until the first run calibrates it.
 #
 #  Sizing model (calibrated on chr19 at 380,962 people, 4 CPUs, README s11:
 #  12a 67 s, 12b 475 s, 12c 361 s for 156,485 window SNPs and 1,525 genes,
@@ -23,14 +33,20 @@
 # =============================================================================
 set -euo pipefail
 DISEASE=${1:?disease}; COHORT=${2:?cohort}; shift 2
-DRY=0; CHRS=$(seq 1 22 | tr '\n' ' ')
+DRY=0; CHRS=$(seq 1 22 | tr '\n' ' '); DO_CHR=1; DO_12D=1; PARTS=8; CMP=""; GDIR=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
         --chr) CHRS=${2//,/ }; shift 2 ;;
+        --no-12d) DO_12D=0; shift ;;
+        --12d-only) DO_CHR=0; shift ;;
+        --parts) PARTS=$2; shift 2 ;;
+        --cmp) CMP=$2; shift 2 ;;
+        --genome-dir) GDIR=$2; shift 2 ;;
         *) echo "unknown option $1"; exit 1 ;;
     esac
 done
+(( DO_CHR == 1 || DO_12D == 1 )) || { echo "--no-12d and --12d-only together leave nothing to submit"; exit 1; }
 ROOT=${ROOT:-/home/naa79/project_pi_sz622/naa79/prs-benchmark}
 BENCH=${BENCH:-$(cd "$(dirname "$0")/.." && pwd)}
 PNET=$ROOT/data/processed/$DISEASE/$COHORT/prsnet
@@ -39,6 +55,7 @@ mkdir -p "$BENCH/logs"
 cd "$BENCH"
 printf '%-5s %9s %6s %9s %5s %5s %6s %6s %6s %8s %7s %s\n' chr windowSNPs genes maxgene CPUs mem bed_s clump_s scor_s time jobid note
 TOT_EST=0; IDS=()
+(( DO_CHR == 1 )) || CHRS=""
 for k in $CHRS; do
     M=$PNET/chr$k/gene_manifest.tsv; WF=$PNET/chr$k/window.snplist
     [[ -f "$M" && -f "$WF" ]] || { printf '%-5s %s\n' "$k" "no gene_manifest.tsv / window.snplist under $PNET/chr$k -- skipped"; continue; }
@@ -64,7 +81,33 @@ for k in $CHRS; do
     fi
     printf '%-5s %9d %6d %9d %5d %5s %6d %6d %6d %8s %7s %s\n' "$k" "$W" "$G" "$MAXG" "$C" "$MEM" "$BED" "$CLUMP" "$SCORE" "$TIME" "${JOB%%_*}" "$NOTE"
 done
-printf 'estimated compute if run one after another: %d min; the longest single job bounds the wall when they run together\n' $((TOT_EST / 60))
+(( DO_CHR == 1 )) && printf 'estimated compute if run one after another: %d min; the longest single job bounds the wall when they run together\n' $((TOT_EST / 60))
+
+# --- 12d as prep -> rows[0..PARTS-1] -> finish, each waiting on the one before --------
+if (( DO_12D == 1 )); then
+    EXP="ALL,DISEASE=$DISEASE,COHORT=$COHORT,CHAIN_PARTS=$PARTS"
+    [[ -n "$GDIR" ]] && EXP+=",CHAIN_GENOME_DIR=$GDIR"
+    [[ -n "$CMP" ]] && EXP+=",CHAIN_CMP=$CMP"
+    DEP=""; (( ${#IDS[@]} > 0 )) && DEP="--dependency=afterok:$(IFS=:; echo "${IDS[*]}")"
+    RSEC=$(awk -v P="$PARTS" 'BEGIN{printf "%d", 2 * 1.3 * 1737 / P + 300}')
+    RMIN=$(( (RSEC + 299) / 300 * 5 ))
+    RTIME=$(printf '%02d:%02d:00' $((RMIN / 60)) $((RMIN % 60)))
+    FTIME=0:10:00; [[ -n "$CMP" ]] && FTIME=0:30:00
+    sub() {   # sub <name> <array|-> <cpus> <mem> <time> <dependency|-> <STEP>
+        local arr=(--array="$2"); [[ "$2" == - ]] && arr=(--array=0)   # the header says --array=19
+        local dep=(); [[ "$6" != - ]] && dep=("$6")
+        if (( DRY == 1 )); then echo "dry"; return; fi
+        local j; j=$(sbatch --parsable --job-name="$1" "${arr[@]}" --cpus-per-task="$3" --mem="$4" --time="$5" "${dep[@]}" \
+                            --export="$EXP,STEP=$7" port/prsnet_chain.sbatch)
+        echo "${j%%;*}"
+    }
+    JP=$(sub pnet_prep   -                1 4G  0:10:00 "${DEP:--}"                 prep);   JP=${JP%%_*}
+    JR=$(sub pnet_rows   "0-$((PARTS-1))" 2 12G "$RTIME" "--dependency=afterok:$JP" rows);  JR=${JR%%_*}
+    JF=$(sub pnet_finish -                1 2G  "$FTIME" "--dependency=afterok:$JR" finish); JF=${JF%%_*}
+    printf '12d: prep %s (1 CPU, 4G, 10 min) -> rows %s (%d x 2 CPU, 12G, %s) -> finish %s (1 CPU, 2G, %s%s)\n' \
+        "$JP" "$JR" "$PARTS" "$RTIME" "$JF" "$FTIME" "${CMP:+, cmp vs $CMP}"
+    IDS+=("$JP" "$JR" "$JF")
+fi
 if (( DRY == 0 && ${#IDS[@]} > 0 )); then
     echo "watch:  squeue -u \$USER -o '%.12i %.10j %.4C %.8m %.10M %.10l %.3t %R'"
     echo "after:  sacct -j $(IFS=,; echo "${IDS[*]}") --format=JobID%14,JobName,Elapsed,TotalCPU,MaxRSS,ReqMem,State | grep -v '^[0-9]*_[0-9]*\.'"
