@@ -31,10 +31,13 @@
 #  LD ablation (README s12): CHAIN_FEATURES=ct|ct-unique|ldpred2|ldpred2-unique picks
 #  the weights step (lib/make_ld_weights.py); default ct = the authors' features =
 #  the stage-3 golden. Non-ct modes write scores to $OUT/features_<mode>/chr<k>/scores
-#  and 12d to $OUT/genome/${DISEASE}_${COHORT}_<mode>/ (the trainer's --dataset), so
-#  the bed and the clumps (12a, 12b) are built once and shared by every mode; run the
-#  ct chain first, then the others with CHAIN_KEEP_BED=1 on the ct run or let each
-#  mode rebuild the bed (76 s - 3 min per chromosome). ldpred2 modes need
+#  and 12d to $OUT/genome/${DISEASE}_${COHORT}_<mode>/ (the trainer's --dataset).
+#  ONE CHAIN_OUT PER ROW, NEVER TWO ROWS IN ONE DIRECTORY AT ONCE (2026-10-24): the
+#  chromosome bed is transient (built by 12a, deleted after 12c), so two rows sharing
+#  $OUT/chr<k> delete each other's bed mid-scoring and read each other's half-written
+#  clumps (chr19 ct-unique saw 70,608 of 79,709 index links). Use e.g.
+#  CHAIN_OUT=.../prsnet_chain/ad_eur_ct_unique; the bed is rebuilt per row (1-3 min a
+#  chromosome), clumps can be symlinked from a finished row. ldpred2 modes need
 #  CHAIN_BETAS (betas.txt from 10b write; default $LDP_GEN/betas.txt of the run) and
 #  CHAIN_BETA_COL (the chosen grid model, e.g. g011 for ad/eur, g035 for t2d/eur).
 #

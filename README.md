@@ -971,11 +971,17 @@ no golden; the oracle is `ref_eqtl_plink2`'s plink2 `--score` path on the same
 dense numpy sum as smoke test 34 does.
 
 **Production (`port/prsnet_chain.sbatch`, `CHAIN_FEATURES=<row>`).** The ct
-chain runs as before. The other rows reuse its bed and clumps if the bed was
-kept (`CHAIN_KEEP_BED=1`), else rebuild the bed (76 s – 3 min per
-chromosome), skip nothing in 12b (resume is free: `.clumped` files exist),
-and write `features_<row>/chr<k>/scores` and `genome/<disease>_<cohort>_<row>/`
-— the trainer's `--dataset`. 12d for ldpred2 rows passes `--channels
+chain runs as before. The other rows rebuild the bed (76 s – 3 min per
+chromosome), reuse clumps that exist (resume is free), and write
+`features_<row>/chr<k>/scores` and `genome/<disease>_<cohort>_<row>/` — the
+trainer's `--dataset`. **One `CHAIN_OUT` per row** (e.g.
+`…/prsnet_chain/ad_eur_ct_unique`): the chromosome bed is transient, so two
+rows launched into one directory delete each other's bed mid-scoring and read
+each other's half-written clumps — learned on 2026-10-24 when ct-unique and
+ldpred2 were submitted into the same `CHAIN_OUT` (OOM/FAILED tasks, and chr19's
+ct-unique builder saw 70,608 of 79,709 index links). Clumps from a finished
+row can be symlinked into a new row's `chr<k>/clumps` with its
+`clump_manifest.tsv` copied alongside. 12d for ldpred2 rows passes `--channels
 $CHAIN_BETA_COL` (a one-line addition to production `12_prsnet.py assemble`,
 project doc `claude/12_prsnet.py`, 2026-10-24 — re-snapshot after it lands).
 
