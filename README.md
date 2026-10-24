@@ -891,5 +891,13 @@ a `== <stage> <s> s` lap line. `STEP=12d` runs production's
 `12_prsnet.py assemble` unchanged over the run dir (one small job after the
 22 tasks; feats.f32 lands in scratch too). `verify` compares one
 chromosome's clumps with production's `.clumped` (exact index sets) and its
-scores with a golden dir (`CHAIN_GOLDEN`). The first run is chr19 inside the
-salloc, then `verify` against `runs/ct_full/golden_chr19`, then the array.
+scores with a golden dir (`CHAIN_GOLDEN`).
+
+**chr19 through the chain (2026-10-23, 4 CPUs, salloc).** 12a 67 s (bed
+14.9 GB, 1.09 GB/s in, 0 SNPs left to the minor-allele rule on chr19), 12b
+475 s (1,525 genes, 4 plink at a time, ERICH4 first), 12c weights 1 s +
+`ct_sparse_v5` 361 s (96 chunks of 176 columns, write 170 s of it), bed
+deleted: **905 s = 15 min 5 s** against production's ~31 min for the same
+chromosome. `verify`: scores **PASS, 16,786 cols, max|diff| 0** against
+`runs/ct_full/golden_chr19` (production feats.f32). The 22-task array
+(8 CPUs / 64 GB per task) is the next submission.
