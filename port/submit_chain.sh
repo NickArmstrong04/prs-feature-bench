@@ -7,8 +7,9 @@
 #
 #      bash port/submit_chain.sh <disease> <cohort> [--dry-run] [--chr 1,2,19]
 #             [--no-12d | --12d-only] [--parts 8] [--cmp /prod/feats.f32] [--genome-dir DIR]
-#             [--snps-only] [--scale 1.5]
+#             [--snps-only] [--scale 1.5] [--after JOBID[:JOBID]]
 #
+#  --after adds afterok dependencies on already-running jobs (e.g. --12d-only --after <chr1 rerun>).
 #  --scale multiplies every chromosome job's time request (default 1.0; the model's
 #  1.3x + 5 min margin was ~15 % high on the big AD chromosomes and ran out on uc chr1).
 #
@@ -43,7 +44,7 @@
 # =============================================================================
 set -euo pipefail
 DISEASE=${1:?disease}; COHORT=${2:?cohort}; shift 2
-DRY=0; CHRS=$(seq 1 22 | tr '\n' ' '); DO_CHR=1; DO_12D=1; PARTS=8; CMP=""; GDIR=""; SNPS=0; SCALE=1.0
+DRY=0; CHRS=$(seq 1 22 | tr '\n' ' '); DO_CHR=1; DO_12D=1; PARTS=8; CMP=""; GDIR=""; SNPS=0; SCALE=1.0; AFTER=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --genome-dir) GDIR=$2; shift 2 ;;
         --snps-only) SNPS=1; shift ;;
         --scale) SCALE=$2; shift 2 ;;
+        --after) AFTER=$2; shift 2 ;;
         *) echo "unknown option $1"; exit 1 ;;
     esac
 done
@@ -110,7 +112,8 @@ if (( DO_12D == 1 )); then
     EXP="ALL,DISEASE=$DISEASE,COHORT=$COHORT,CHAIN_PARTS=$PARTS,BENCH=$BENCH"
     [[ -n "$GDIR" ]] && EXP+=",CHAIN_GENOME_DIR=$GDIR"
     [[ -n "$CMP" ]] && EXP+=",CHAIN_CMP=$CMP"
-    DEP=""; (( ${#IDS[@]} > 0 )) && DEP="--dependency=afterok:$(IFS=:; echo "${IDS[*]}")"
+    ALLDEP=("${IDS[@]}"); [[ -n "$AFTER" ]] && ALLDEP+=(${AFTER//:/ })
+    DEP=""; (( ${#ALLDEP[@]} > 0 )) && DEP="--dependency=afterok:$(IFS=:; echo "${ALLDEP[*]}")"
     RSEC=$(awk -v P="$PARTS" 'BEGIN{printf "%d", 2 * 1.3 * 1737 / P + 300}')
     RMIN=$(( (RSEC + 299) / 300 * 5 ))
     RTIME=$(printf '%02d:%02d:00' $((RMIN / 60)) $((RMIN % 60)))
