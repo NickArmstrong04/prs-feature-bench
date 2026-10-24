@@ -40,7 +40,7 @@ prs-feature-bench/
 ├── eqtl/
 │   └── weights_to_plink2.py  long-format weights -> plink2 wide score file
 ├── tests/smoke_test.py     synthetic end-to-end test of the Python pieces
-├── port/                   the single-submission draft (§10): features sbatch + merge_shards.py
+├── port/                   single submissions: prsnet_chain.sbatch (PRS-Net 12a-12d, §11); PRSNet-2 features sbatch + merge_shards.py (§10)
 ├── prod_snapshot/          READ-ONLY copies of the production scripts (12_prsnet.{sh,py}, trainer,
 │                           config.sh, …); MANIFEST.txt = provenance + md5s. Two optimisation
 │                           lines branch from them: PRS-Net (ct/dosage variants) and the eQTL addition
@@ -807,10 +807,12 @@ there).
 | chr19 total | ~31 min | ~15 min | |
 
 The bed stage is 9× and done. The clump stage runs production's own plink,
-so its cost is unchanged; genome-wide the giant genes (`12bg`, 23 h summed
-on 1 CPU each) are the single largest item left, and only a numpy clump
-that reproduces plink's index-SNP selection exactly would remove it (the
-1,525 chr19 `.clumped` files plus every other chromosome's are the goldens).
+so its cost per gene is unchanged; what the submission removes is the
+scheduling — the giant genes (`12bg`, 23 h summed on 1 CPU each, 75 jobs
+with reruns) run inside the chromosome's task like every other gene, largest
+first, `$SLURM_CPUS_PER_TASK` plinks at a time. A numpy clump was tried and
+closed (`clump_np_v0`, below): plink's r² is not the genotype correlation,
+and reproducing its EM r² exactly costs more GEMM than plink's own popcounts.
 The scoring stage's compute is 2.4× faster than 12c's but the stage is
 write-bound: 25.6 GB per chromosome at ~160 MB/s, the same bytes 12c wrote
 and 12d writes again when it assembles `feats.f32` (332 GB, 0.4 h). A
@@ -839,9 +841,55 @@ bench's **clumps layout** (fifth layout; `compare_clumps.py` compares index
 SETS exactly; `ref_clump` = plink per gene on the fixture → `golden/clumps`;
 `lib/clumped_to_tsv.py` turns production's `.clumped` directories into the
 same file). Smoke test 33: pairs and r² equal a brute force, index sets equal
-a hand-written greedy. Not yet run on Bouchet: the fixture decides whether
-plink's r² and ordering are reproduced; chr19's 1,525 production `.clumped`
-files are the full-cohort golden. Cost model: GEMM-bound, ~2 × n × (pairs
-within reach) flops — chr19 at 380,962 people ≈ 2 × 10¹⁴, 20–30 min on 4
-cores; it replaces the task arrays and the giants together, and scales with
-cores in the submission.
+a hand-written greedy.
+
+**clump_np_v0: FAIL, closed (2026-10-23).** fixture_20k: `ref_clump` (plink
+per gene, 4 at a time) 0:32.73 → `golden/clumps`; `clump_np_v0` 2:47.09,
+**FAIL: 1526 genes, 1316 identical, 210 differ** (79,715 index SNPs vs
+79,639; LD pass 161 s of which GEMM 125 s). Full chr19 on the v1 bed: LD pass
+51 min (read 701 s, GEMM 2363 s, 4 cores), greedy 9 s, **637 identical, 889
+differ** against production's 1,525 `.clumped` (80,542 vs 79,709 index
+SNPs). The ordering is right (ties by P then .bim index is exactly plink's
+`double_cmp_deref_tiebreak`, its 2021 determinism fix); the r² is not.
+plink 1.9's `clump_reports` (plink_ld.c) does **not** use the allele-count
+correlation: for each (index, candidate) pair it builds the 3 × 3 genotype
+table over founders with both calls present (`genovec_3freq` against the
+index SNP's three genotype masks), turns it into the four known haplotype
+counts plus the double-heterozygote count, and runs `em_phase_hethet` — the
+maximum-likelihood haplotype frequencies from the cubic (`cubic_real_roots`,
+boundary and multiple-root rules, `calc_lnlike` to pick the root) — then
+r² = D² / (p₁ q₁ p₂ q₂) with D = f₁₁ − p₁ q₁, and clumps when r² is
+**strictly greater** than `--clump-r2`. The genotype r² and the EM r² agree
+on most pairs, which is why 1,316 genes matched, and disagree around the
+threshold; with 380,962 people the disagreements multiplied (889 genes).
+Reproducing it exactly is possible — the 3 × 3 table has four degrees of
+freedom once the per-SNP marginals are known, so four indicator GEMMs (or
+two float64 GEMMs with packed counts) per block pair, then the EM in float64
+per candidate pair — but it would cost 2–4× the one GEMM that already took
+51 min on chr19, where production's own plink loop clumps all 1,525 genes
+(ERICH4 included) in **7 min 52 s on the same 4 CPUs**. plink's per-index
+popcounts over 2-bit genotypes, skipping SNPs already clumped, are simply
+the cheaper algorithm here; the chromosome-wide LD graph saves nothing. The
+numpy clump is closed; 12b stays plink, scheduled better. The variant,
+`ref_clump`, `compare_clumps.py`, the clumps layout and `clumped_to_tsv.py`
+stay as the exact-comparison machinery for any future 12b change, and smoke
+test 33 still checks `clump_np_v0` against its own definition.
+
+**The single submission: `port/prsnet_chain.sbatch`** (draft, not yet run
+under sbatch). One array, one task per chromosome, 8 CPUs / 64 GB / 8 h (the
+limit is chr1's: 545,489 window SNPs and 8 of the 30 giant genes): 12a
+`bed_seek_v1` → 12b production's plink `--clump` per gene, all genes
+including the giants, largest first, `$SLURM_CPUS_PER_TASK` at a time with
+`--memory` split evenly, `clump_manifest.tsv` by 12b's own awk → 12c
+`ct_sparse_v5` in the chunk layout → the bed deleted (`CHAIN_KEEP_BED=1`
+keeps it). Everything lands in scratch
+(`CHAIN_OUT`, default `…/scratch_pi_sz622/naa79/prs-feature-bench/prsnet_chain/<disease>_<cohort>/chr<k>/`),
+production's `genes/`, `gene_manifest.tsv` and `window.snplist` are reused
+when they exist (made with `12_prsnet.py snps` otherwise), every stage
+resumes if its output exists (`CHAIN_FORCE=1` redoes), and each stage prints
+a `== <stage> <s> s` lap line. `STEP=12d` runs production's
+`12_prsnet.py assemble` unchanged over the run dir (one small job after the
+22 tasks; feats.f32 lands in scratch too). `verify` compares one
+chromosome's clumps with production's `.clumped` (exact index sets) and its
+scores with a golden dir (`CHAIN_GOLDEN`). The first run is chr19 inside the
+salloc, then `verify` against `runs/ct_full/golden_chr19`, then the array.
