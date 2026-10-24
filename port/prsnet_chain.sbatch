@@ -28,6 +28,16 @@
 #  delete the bed), CHAIN_MAX_GAP (64), CHAIN_CHUNK_GB (1.0), CHAIN_FORCE=1 (redo stages
 #  whose outputs exist; the default resumes).
 #
+#  LD ablation (README s12): CHAIN_FEATURES=ct|ct-unique|ldpred2|ldpred2-unique picks
+#  the weights step (lib/make_ld_weights.py); default ct = the authors' features =
+#  the stage-3 golden. Non-ct modes write scores to $OUT/features_<mode>/chr<k>/scores
+#  and 12d to $OUT/genome/${DISEASE}_${COHORT}_<mode>/ (the trainer's --dataset), so
+#  the bed and the clumps (12a, 12b) are built once and shared by every mode; run the
+#  ct chain first, then the others with CHAIN_KEEP_BED=1 on the ct run or let each
+#  mode rebuild the bed (76 s - 3 min per chromosome). ldpred2 modes need
+#  CHAIN_BETAS (betas.txt from 10b write; default $LDP_GEN/betas.txt of the run) and
+#  CHAIN_BETA_COL (the chosen grid model, e.g. g011 for ad/eur, g035 for t2d/eur).
+#
 #  Resources (see submit_chain.sh for the model): chr19 on 4 CPUs took 67 s (bed) + 475 s (clump) +
 #  361 s (score) = 905 s and ~15 GB of scratch while the bed existed. chr1 is 3.5x
 #  the SNPs and holds 8 of the 30 giant genes (300k-469k window SNPs each, 7-30 min
@@ -70,6 +80,14 @@ OUT=${CHAIN_OUT:-/home/naa79/scratch_pi_sz622/naa79/prs-feature-bench/prsnet_cha
 C=$OUT/chr$CHR
 BED=$C/target_chr${CHR}.PH
 FORCE=${CHAIN_FORCE:-0}
+FEAT=${CHAIN_FEATURES:-ct}
+case "$FEAT" in ct|ct-unique|ldpred2|ldpred2-unique) ;; *) echo "CHAIN_FEATURES must be ct|ct-unique|ldpred2|ldpred2-unique (got $FEAT)"; exit 1 ;; esac
+if [[ "$FEAT" == ct ]]; then SCORES=$C/scores; GENOME=$OUT/genome/${DISEASE}_${COHORT}; FEAT_RUN=$OUT
+else SCORES=$OUT/features_$FEAT/chr$CHR/scores; GENOME=$OUT/genome/${DISEASE}_${COHORT}_${FEAT//-/_}; FEAT_RUN=$OUT/features_$FEAT; fi
+if [[ "$FEAT" == ldpred2* ]]; then
+    CHAIN_BETAS=${CHAIN_BETAS:-${LDP_GEN:-}/betas.txt}
+    : "${CHAIN_BETA_COL:?ldpred2 modes need CHAIN_BETA_COL (the chosen grid model, e.g. g011)}"
+fi
 t0=$(date +%s); tlast=$t0
 lap() { local now; now=$(date +%s); printf '== %-28s %6d s  (stage)  %6d s (total)  %s\n' "$1" $((now - tlast)) $((now - t0)) "$(date +%T)"; tlast=$now; }
 need_module() {
@@ -87,15 +105,16 @@ need_module() {
 # -----------------------------------------------------------------------------
 if [[ "$STEP" == 12d ]]; then
     for c in $(seq 1 22); do
-        [[ -f "$OUT/chr$c/scores/scores_manifest.tsv" ]] || { echo "chr$c has no scores yet: $OUT/chr$c/scores/scores_manifest.tsv"; exit 1; }
+        [[ -f "$FEAT_RUN/chr$c/scores/scores_manifest.tsv" ]] || { echo "chr$c has no scores yet: $FEAT_RUN/chr$c/scores/scores_manifest.tsv"; exit 1; }
     done
     [[ -n "${PHENO:-}" && -f "$PHENO" ]] || { echo "no phenotype for $DISEASE/$COHORT (PHENO unset or missing)"; exit 1; }
     [[ -f "$PRSNET_GENE_ORDER" ]] || { echo "MISSING: $PRSNET_GENE_ORDER"; exit 1; }
     ANC=UNK; [[ "$COHORT" == eur || "$COHORT" == caucasian ]] && ANC=EUR
-    G=$OUT/genome/${DISEASE}_${COHORT}; mkdir -p "$G"
-    echo "== 12d assemble $DISEASE/$COHORT  run-dir $OUT  ->  $G  ($(date))"
-    "$PRSNET_PY" "$PRSNET_SCRIPT" assemble --run-dir "$OUT" --gene-order "$PRSNET_GENE_ORDER" \
-        --pheno "$PHENO" --ancestry "$ANC" --out-dir "$G" --thresholds "$PRSNET_THRESHOLDS" \
+    G=$GENOME; mkdir -p "$G"
+    CH_12D=(--thresholds "$PRSNET_THRESHOLDS"); [[ "$FEAT" == ldpred2* ]] && CH_12D=(--channels "$CHAIN_BETA_COL")   # needs 12_prsnet.py with --channels (2026-10-24)
+    echo "== 12d assemble $DISEASE/$COHORT [$FEAT]  run-dir $FEAT_RUN  ->  $G  ($(date))"
+    "$PRSNET_PY" "$PRSNET_SCRIPT" assemble --run-dir "$FEAT_RUN" --gene-order "$PRSNET_GENE_ORDER" \
+        --pheno "$PHENO" --ancestry "$ANC" --out-dir "$G" "${CH_12D[@]}" \
         --export "${PRSNET_EXPORT:-memmap}" --expect-n-genes "$PRSNET_N_GENES" --sample-block 5000
     lap "12d assemble"
     ls -la "$G"
@@ -126,8 +145,8 @@ fi
 # -----------------------------------------------------------------------------
 #  one chromosome
 # -----------------------------------------------------------------------------
-mkdir -p "$C/clumps" "$C/scores"
-echo "== prsnet chain $DISEASE/$COHORT chr$CHR  $CPUS CPUs  ${MEM_MB} MB  ($(date))"
+mkdir -p "$C/clumps" "$SCORES"
+echo "== prsnet chain $DISEASE/$COHORT chr$CHR [$FEAT]  $CPUS CPUs  ${MEM_MB} MB  ($(date))"
 echo "raw:    $GENO_PREFIX"; echo "keep:   $KEEP_LIST ($(wc -l < "$KEEP_LIST") lines)"; echo "out:    $C"
 
 # gene files: production's 12a `snps` outputs survive at $PNET_CHR; make them there only if absent
@@ -152,8 +171,8 @@ echo "genes:  $MANIFEST ($(awk 'NR>1 && $4>0' "$MANIFEST" | wc -l) with SNPs; $(
 # --- 12a: the cohort bed, seeked out of the raw release ------------------------
 if [[ -f "$BED.bed" && -f "$BED.bim" && -f "$BED.fam" && "$FORCE" != 1 ]]; then
     echo "12a: $BED.bed exists -- kept"
-elif [[ -f "$C/scores/scores_manifest.tsv" && "$FORCE" != 1 ]]; then
-    echo "12a: scores already exist for chr$CHR and the bed was deleted -- nothing to do"; exit 0
+elif [[ -f "$SCORES/scores_manifest.tsv" && "$FORCE" != 1 ]]; then
+    echo "12a: [$FEAT] scores already exist for chr$CHR and the bed was deleted -- nothing to do"; exit 0
 else
     BENCH_THREADS=$CPUS "$PRSNET_PY" "$BENCH/variants/bed_seek_v1/bed_seek.py" \
         --raw "$GENO_PREFIX" --extract "$WINDOW" --keep "$KEEP_LIST" --a1 "$MIS/target_data.a1" \
@@ -193,20 +212,42 @@ echo "12b: $(awk -F'\t' 'NR>1 && $NF=="ok"' "$C/clump_manifest.tsv" | wc -l) ok,
 (( NFAIL == 0 )) || { awk -F'\t' 'NR>1 && $NF=="failed" {print "  failed:", $1}' "$C/clump_manifest.tsv"; echo "12b: a plink --clump failed (no .clumped); rerun resumes"; exit 1; }
 lap "12b plink clump"
 
-# --- 12c: ct_sparse_v5 kernel, 12c's chunk layout -------------------------------
-if [[ -f "$C/scores/scores_manifest.tsv" && "$FORCE" != 1 ]]; then
-    echo "12c: $C/scores/scores_manifest.tsv exists -- kept"
+# --- 12c: weights for the chosen feature construction, then the chunked kernel ----
+if [[ -f "$SCORES/scores_manifest.tsv" && "$FORCE" != 1 ]]; then
+    echo "12c: $SCORES/scores_manifest.tsv exists -- kept"
 else
-    "$PRSNET_PY" "$BENCH/lib/make_ct_weights.py" --clumps "$C/clumps" --manifest "$C/clump_manifest.tsv" \
-        --gwas "$GQC/gwas.QC.txt" --pvalue "$GQC/SNP.pvalue" --thresholds "$PRSNET_THRESHOLDS" \
-        --out "$C/ct_weights.tsv" --genes-out "$C/genes_all.txt"
-    lap "12c weights"
-    "$PRSNET_PY" "$BENCH/variants/ct_sparse_v5/sparse_score.py" --bed "$BED" --weights "$C/ct_weights.tsv" \
-        --out "$C/scores" --mode ct --thresholds "$PRSNET_THRESHOLDS" --all-genes "$C/genes_all.txt" \
-        --block 4000 --threads "$CPUS" --chunk-gb "${CHAIN_CHUNK_GB:-1.0}" --out-layout chunks
-    lap "12c ct_sparse_v5"
+    WDIR=$(dirname "$SCORES"); mkdir -p "$WDIR"
+    if [[ "$FEAT" == ct ]]; then
+        "$PRSNET_PY" "$BENCH/lib/make_ct_weights.py" --clumps "$C/clumps" --manifest "$C/clump_manifest.tsv" \
+            --gwas "$GQC/gwas.QC.txt" --pvalue "$GQC/SNP.pvalue" --thresholds "$PRSNET_THRESHOLDS" \
+            --out "$WDIR/weights.tsv" --genes-out "$WDIR/genes_all.txt"
+    elif [[ "$FEAT" == ct-unique ]]; then
+        "$PRSNET_PY" "$BENCH/lib/make_ld_weights.py" --mode ct-unique --windows "$PRSNET_WINDOWS" --chr "$CHR" \
+            --clumps "$C/clumps" --manifest "$C/clump_manifest.tsv" --bim "$BED.bim" \
+            --gwas "$GQC/gwas.QC.txt" --pvalue "$GQC/SNP.pvalue" --thresholds "$PRSNET_THRESHOLDS" \
+            --out "$WDIR/weights.tsv" --genes-out "$WDIR/genes_all.txt" --report "$WDIR/assign_report.tsv"
+    else
+        [[ -f "$CHAIN_BETAS" ]] || { echo "MISSING: $CHAIN_BETAS (LDpred2 10b write output)"; exit 1; }
+        awk -v C="$CHR" 'NR==1 || $2==C' "$CHAIN_BETAS" > "$WDIR/betas_chr$CHR.txt"
+        "$PRSNET_PY" "$BENCH/lib/make_ld_weights.py" --mode "$FEAT" --windows "$PRSNET_WINDOWS" --chr "$CHR" \
+            --genes-dir "$GENES" --bim "$BED.bim" --betas "$WDIR/betas_chr$CHR.txt" --beta-col "$CHAIN_BETA_COL" \
+            --out "$WDIR/weights.tsv" --genes-out "$WDIR/genes_all.txt" --report "$WDIR/assign_report.tsv"
+    fi
+    lap "12c weights [$FEAT]"
+    if [[ "$FEAT" == ldpred2* ]]; then
+        "$PRSNET_PY" "$BENCH/variants/ldpred2_v0/sparse_score.py" --bed "$BED" --weights "$WDIR/weights.tsv" \
+            --out "$SCORES" --mode sum --all-genes "$WDIR/genes_all.txt" --channels "$CHAIN_BETA_COL" \
+            --block 4000 --threads "$CPUS" --chunk-gb "${CHAIN_CHUNK_GB:-1.0}" --out-layout chunks
+        lap "12c ldpred2_v0 kernel"
+    else
+        "$PRSNET_PY" "$BENCH/variants/ct_sparse_v5/sparse_score.py" --bed "$BED" --weights "$WDIR/weights.tsv" \
+            --out "$SCORES" --mode ct --thresholds "$PRSNET_THRESHOLDS" --all-genes "$WDIR/genes_all.txt" \
+            --block 4000 --threads "$CPUS" --chunk-gb "${CHAIN_CHUNK_GB:-1.0}" --out-layout chunks
+        lap "12c ct_sparse_v5"
+    fi
+    rm -f "$WDIR/weights.tsv"
 fi
-echo "scores: $(awk 'NR>1' "$C/scores/scores_manifest.tsv" | wc -l) chunks, $(awk 'NR>1' "$C/scores/gene_counts.tsv" | wc -l) genes  ($(du -sh "$C/scores" | cut -f1))"
+echo "scores: $(awk 'NR>1' "$SCORES/scores_manifest.tsv" | wc -l) chunks, $(awk 'NR>1' "$SCORES/gene_counts.tsv" | wc -l) genes  ($(du -sh "$SCORES" | cut -f1))"
 
 # --- the bed is scratch; 12d needs only scores/ ----------------------------------
 if [[ "${CHAIN_KEEP_BED:-0}" == 1 ]]; then
@@ -214,5 +255,4 @@ if [[ "${CHAIN_KEEP_BED:-0}" == 1 ]]; then
 else
     rm -f "$BED.bed"; echo "bed deleted ($BED.bed); .bim/.fam kept"
 fi
-rm -f "$C/ct_weights.tsv"
 lap "chr$CHR done"

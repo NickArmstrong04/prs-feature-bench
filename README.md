@@ -928,3 +928,78 @@ chromosomes and high for the small ones; its 1.5× + 10 min margin made the
 requests about twice the actual, so the margin is now 1.3× + 5 min. 12d
 (production's `assemble` over the scratch run dir, job 30508884) and the
 byte comparison of its `feats.f32` with production's are pending.
+
+## 12. LD ablation: fixing the node features, not the graph (branch `ld-ablation`)
+
+**Why.** The LD diagnostic on the production feature stores (project doc
+`claude/ld_experiments.md`, Oct 19–24 2026) showed that genomically adjacent
+genes' features correlate at ~20× the PPI level (AD: adjacent no-shared-SNP
+mean |r| 0.112, shared 0.573, PPI and random 0.006; T2D 0.152 / 0.639 — ~35 %
+higher, scaling with GWAS precision), that 14 % of index SNPs sit in more than
+one gene (55 % of index entries counting the 30 giant windows), and the graph
+ablations (identity / shuffled / explicit LD edge type) showed the model does
+not correct for it: a degree-preserving shuffle of the PPI graph matches the
+real one (0.714 ± 0.012 vs 0.709 ± 0.013 on ad/eur), and an LD edge type is
+learned with a *positive* weight. So the fix is at the feature level, and the
+ablation is a set of weight-file constructions on the SAME bed, clumps, kernel,
+assembler and trainer.
+
+**The rows** (`lib/make_ld_weights.py --mode`; every row is the bench weight
+contract, so §2's fidelity rule and `run_variant.sh` apply unchanged):
+
+| row | SNP set per gene | β | channels | removes |
+|---|---|---|---|---|
+| `ct` | per-gene clump index SNPs (12b) | GWAS marginal | 11 nested P-bins | nothing — must equal `make_ct_weights.py` row for row (smoke test 34) and `golden/ct` bit for bit |
+| `ct-unique` | same, but a SNP in k genes stays only in the gene whose **window centre is nearest** (ties: narrower window, then name) | marginal | 11 | the shared-SNP duplication; the clumps are untouched |
+| `ldpred2` | every window SNP with an LDpred2 posterior β (HM3+ set; APOE absent for AD, ldpred2.md) | LDpred2 posterior, one model column (`--beta-col`, the grid model 09 chose: g011 ad/eur, g035 t2d/eur) | 1 | clumping, thresholds, and the inflation of marginal β by LD |
+| `ldpred2-unique` | as above, unique | posterior | 1 | both |
+
+Variants: `ct_unique_v0` (ct_sparse_v5 with the weights line swapped; kernel =
+v5's file) and `ldpred2_v0` (no clumping; its own copy of v5's kernel with
+`--channels` so **sum mode gets the fixed gene-major layout and chunk writer**
+ct mode has — `--all-genes` + `--channels` — and 12d assembles it unchanged,
+`d_input` = 1). `LDPRED_MODE=ldpred2-unique` runs the fourth row through the
+same variant. The fixture needs `fixture/betas.txt` for the ldpred2 rows: the
+run's `ldpred2/genome/betas.txt` (10b `write`) cut to the chromosome
+(`awk 'NR==1 || $2==19'`), and optionally `"ldpred2_col"` in `params.json`.
+
+**Fidelity on the fixture.** `ct_unique_v0 --golden ct --keep` must FAIL (by
+design) with exactly the genes named in `work/assign_report.tsv` differing and
+every other gene's columns at max|diff| 0 — that is the check. `ldpred2_v0` has
+no golden; the oracle is `ref_eqtl_plink2`'s plink2 `--score` path on the same
+`weights.tsv` (sum mode, already validated to 5e-6), or `compare.py` against a
+dense numpy sum as smoke test 34 does.
+
+**Production (`port/prsnet_chain.sbatch`, `CHAIN_FEATURES=<row>`).** The ct
+chain runs as before. The other rows reuse its bed and clumps if the bed was
+kept (`CHAIN_KEEP_BED=1`), else rebuild the bed (76 s – 3 min per
+chromosome), skip nothing in 12b (resume is free: `.clumped` files exist),
+and write `features_<row>/chr<k>/scores` and `genome/<disease>_<cohort>_<row>/`
+— the trainer's `--dataset`. 12d for ldpred2 rows passes `--channels
+$CHAIN_BETA_COL` (a one-line addition to production `12_prsnet.py assemble`,
+project doc `claude/12_prsnet.py`, 2026-10-24 — re-snapshot after it lands).
+
+```bash
+# ct-unique on ad/eur, all 22 chromosomes (bed rebuilt per chromosome), then 12d
+CHAIN_FEATURES=ct-unique bash port/submit_chain.sh ad eur
+sbatch --export=ALL,DISEASE=ad,COHORT=eur,STEP=12d,CHAIN_FEATURES=ct-unique --array=1 --cpus-per-task=4 --mem=32G --time=4:00:00 port/prsnet_chain.sbatch
+# ldpred2 (grid g011) on ad/eur
+CHAIN_FEATURES=ldpred2 CHAIN_BETA_COL=g011 bash port/submit_chain.sh ad eur
+# then, per row: the input-level diagnostic and training with the embedding leakage
+cd $ROOT/scripts/slurm && export DISEASE=ad COHORT=eur && source config.sh
+python3 14_ld_leakage.py --feats-dir <scratch>/prsnet_chain/ad_eur/genome/ad_eur_ct_unique --thresholds "1" ...   # labels from feats.meta.json
+TAG=ct_unique bash 13_prsnet_train.sh train --splits 0 --load ram      # --dataset ad_eur_ct_unique via DS override
+```
+
+(`13_prsnet_train.sh` derives `--dataset` from `${DISEASE}_${COHORT}`; the LD
+stores need a `DS=` override or a symlink `genome/ad_eur_ct_unique` next to the
+production store — pick one and record it here when the first row runs.)
+
+**Each row records two numbers**, exactly as the graph ablations did: the
+input-level pair-class correlations from `14_ld_leakage.py` on the new store
+(does `ct-unique` zero the shared class? does `ldpred2` shrink the no-shared
+class?) and test AUROC ± sd over the authors' six folds with the embedding
+leakage at the readout. Predictions from the diagnostic: `ct-unique` helps
+little (it touches 10 % of adjacent pairs), `ldpred2` more, both more on T2D
+(sd 0.002) than AD (sd 0.013); the genome-wide LDpred2 − C+T gap is +0.006 on
+AD and +0.057 on T2D.

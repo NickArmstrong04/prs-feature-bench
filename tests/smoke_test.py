@@ -700,4 +700,93 @@ open(f"{CL}/clumps_bad.tsv", "w").write(bad_c)
 txt = run(PY + [f"{B}/compare_clumps.py", f"{CL}/clumps.tsv", f"{CL}/clumps_bad.tsv"], ok=2); assert "1 differ" in txt and "ZZZ" in txt, txt
 print("33. clump_np_v0: ld_pairs == brute-force pairwise-deletion r^2 (exact), clump_genes == P-ordered greedy (tie by position, SNP without P skipped, monomorphic SNP); compare_clumps  OK")
 
+
+# ---- 34. LD-ablation weights (README s12): make_ld_weights ct == make_ct_weights; ct-unique removes exactly the
+#          shared index SNPs under the nearest-centre rule; ldpred2 (+unique) through ldpred2_v0's kernel == dense sum,
+#          flat and chunk layouts
+LD = f"{W}/ld"; os.makedirs(f"{LD}/genes", exist_ok=True); os.makedirs(f"{LD}/clumps", exist_ok=True)
+ml = 300; nl = 120
+Gl = rng.integers(0, 3, size=(nl, ml)).astype(np.float32); Gl[rng.random(Gl.shape) < 0.02] = np.nan
+sidl = [f"19:{10000 + 100 * i}" for i in range(ml)]; posl = [10000 + 100 * i for i in range(ml)]
+a1l = rng.choice(list("ACGT"), ml); a2l = np.array([rng.choice([x for x in "ACGT" if x != y]) for y in a1l])
+to_bed(f"{LD}/geno.bed", Gl, properties={"fid": [f"F{i}" for i in range(nl)], "iid": [f"I{i}" for i in range(nl)], "sid": sidl,
+                                        "chromosome": ["19"] * ml, "bp_position": posl, "allele_1": a1l, "allele_2": a2l})
+# 6 genes, overlapping windows so SNPs are shared; L3 has no SNPs; L5 is a wide window containing L4 entirely
+win = {"L0": (10000, 14000), "L1": (13000, 18000), "L2": (17500, 22000), "L3": (29000, 29050), "L4": (24000, 26000), "L5": (23000, 29000)}
+with open(f"{LD}/gene_windows.tsv", "w") as w:
+    w.write("chr\tstart\tend\tgene\n")
+    for g, (st, en) in win.items(): w.write(f"19\t{st}\t{en}\t{g}\n")
+gsnps = {g: [sidl[j] for j in range(ml) if st < posl[j] <= en] for g, (st, en) in win.items()}
+Pl = rng.random(ml) ** 3
+with open(f"{LD}/gwas.QC.txt", "w") as w, open(f"{LD}/SNP.pvalue", "w") as pv:
+    w.write("CHR\tBP\tSNP\tA1\tA2\tN\tSE\tP\tOR\tINFO\tMAF\tBETA\n")
+    for j in range(ml):
+        eff = a2l[j] if j % 3 == 0 else a1l[j]; oth = a1l[j] if j % 3 == 0 else a2l[j]
+        w.write(f"19\t{posl[j]}\t{sidl[j]}\t{eff}\t{oth}\t1000\t0.01\t{Pl[j]:.4g}\t1\t0.9\t0.3\t{rng.normal():.5f}\n"); pv.write(f"{sidl[j]}\t{Pl[j]:.4g}\n")
+with open(f"{LD}/clump_manifest.tsv", "w") as man:
+    man.write("gene\tstart\tend\tn_snps\tbig\tn_index\tstatus\n")
+    for g, snps in gsnps.items():
+        open(f"{LD}/genes/{g}.snplist", "w").write("".join(x + "\n" for x in snps))
+        if not snps: man.write(f"{g}\t{win[g][0]}\t{win[g][1]}\t0\t0\t0\tnosnp\n"); continue
+        idx = [x for k, x in enumerate(snps) if k % 2 == 0]              # "index SNPs": every other window SNP
+        with open(f"{LD}/clumps/{g}.clumped", "w") as c:
+            c.write(" CHR    F         SNP         BP        P    TOTAL   NSIG    S05    S01   S001  S0001    SP2\n")
+            for x in idx: c.write(f"  19    1  {x}  {x.split(':')[1]}  0.5  1 0 0 0 0 0  NONE\n")
+        man.write(f"{g}\t{win[g][0]}\t{win[g][1]}\t{len(snps)}\t0\t{len(idx)}\tok\n")
+THRL = "1e-5 1e-4 1e-3 0.01 0.05 0.1 0.2 0.3 0.4 0.5 1"
+common = ["--windows", f"{LD}/gene_windows.tsv", "--chr", "19", "--clumps", f"{LD}/clumps", "--manifest", f"{LD}/clump_manifest.tsv",
+          "--gwas", f"{LD}/gwas.QC.txt", "--pvalue", f"{LD}/SNP.pvalue", "--thresholds", THRL, "--bim", f"{LD}/geno.bim"]
+run(PY + [f"{B}/lib/make_ct_weights.py", "--clumps", f"{LD}/clumps", "--manifest", f"{LD}/clump_manifest.tsv", "--gwas", f"{LD}/gwas.QC.txt",
+          "--pvalue", f"{LD}/SNP.pvalue", "--thresholds", THRL, "--out", f"{LD}/w_ref.tsv", "--genes-out", f"{LD}/g_ref.txt"])
+print(run(PY + [f"{B}/lib/make_ld_weights.py", "--mode", "ct"] + common + ["--out", f"{LD}/w_ct.tsv", "--genes-out", f"{LD}/g_ct.txt"]).strip())
+assert open(f"{LD}/w_ref.tsv").read() == open(f"{LD}/w_ct.tsv").read() and open(f"{LD}/g_ref.txt").read() == open(f"{LD}/g_ct.txt").read(), "ct mode != make_ct_weights"
+print(run(PY + [f"{B}/lib/make_ld_weights.py", "--mode", "ct-unique"] + common + ["--out", f"{LD}/w_cu.tsv", "--genes-out", f"{LD}/g_cu.txt", "--report", f"{LD}/rep.tsv"]).strip())
+rows_ct = {(l.split("\t")[0], l.split("\t")[1]) for l in open(f"{LD}/w_ct.tsv").read().splitlines()[1:]}
+rows_cu = {(l.split("\t")[0], l.split("\t")[1]) for l in open(f"{LD}/w_cu.tsv").read().splitlines()[1:]}
+assert rows_cu <= rows_ct and len(rows_cu) < len(rows_ct)
+# brute force of the rule on the index SNPs
+idx_of = {g: [x for k, x in enumerate(snps) if k % 2 == 0] for g, snps in gsnps.items() if snps}
+owners = {}
+for g, xs in idx_of.items():
+    for x in xs: owners.setdefault(x, []).append(g)
+def winner(x, gs):
+    p = int(x.split(":")[1]); return min(gs, key=lambda g: (abs(p - (win[g][0] + win[g][1]) / 2), win[g][1] - win[g][0], g))
+expect = {(winner(x, gs), x) for x, gs in owners.items()} & rows_ct              # (the P<=1 filter never drops here: all P<=1)
+assert rows_cu == expect, (sorted(rows_cu ^ expect)[:5])
+shared = {x for x, gs in owners.items() if len(gs) > 1}; assert shared, "fixture has no shared SNPs"
+rep = {l.split("\t")[0] for l in open(f"{LD}/rep.tsv").read().splitlines()[1:]}; assert rep == shared
+assert all(sum(1 for g, x2 in rows_cu if x2 == x) == 1 for x in shared), "a shared SNP kept in two genes"
+# unshared genes' rows unchanged -> their scores are identical under the same kernel
+unshared_genes = {g for g in idx_of if not any(x in shared for x in idx_of[g])}
+assert {r for r in rows_ct if r[0] in unshared_genes} == {r for r in rows_cu if r[0] in unshared_genes}
+# ldpred2 rows: betas.txt with two model columns, a1 = the bim's allele_1 (as 10b write guarantees), zeros here and there
+bl = rng.normal(size=ml) * 1e-3; bl[::7] = 0.0
+with open(f"{LD}/betas.txt", "w") as w:
+    w.write("SNP\tCHR\tA1\tinf\tg001\n")
+    for j in range(ml): w.write(f"{sidl[j]}\t19\t{a1l[j]}\t{bl[j] * 2:.6e}\t{bl[j]:.6e}\n")
+lcommon = ["--windows", f"{LD}/gene_windows.tsv", "--chr", "19", "--genes-dir", f"{LD}/genes", "--bim", f"{LD}/geno.bim", "--betas", f"{LD}/betas.txt", "--beta-col", "g001"]
+print(run(PY + [f"{B}/lib/make_ld_weights.py", "--mode", "ldpred2"] + lcommon + ["--out", f"{LD}/w_lp.tsv", "--genes-out", f"{LD}/g_lp.txt"]).strip())
+assert open(f"{LD}/g_lp.txt").read().split() == sorted(win), "genes-out must list every window gene"
+Dl = Gl.astype(np.float64); ml_ = np.nanmean(Dl, axis=0); ii, jj = np.where(np.isnan(Dl)); Dl[ii, jj] = ml_[jj]
+truth_lp = {g: sum(bl[sidl.index(x)] * Dl[:, sidl.index(x)] for x in snps if bl[sidl.index(x)] != 0) if snps else np.zeros(nl) for g, snps in gsnps.items()}
+for layout in ("flat", "chunks"):
+    o = f"{LD}/lp_{layout}"
+    run(PY + [f"{B}/variants/ldpred2_v0/sparse_score.py", "--bed", f"{LD}/geno", "--weights", f"{LD}/w_lp.tsv", "--out", o, "--mode", "sum",
+              "--all-genes", f"{LD}/g_lp.txt", "--channels", "g001", "--block", "64", "--threads", "1", "--chunk-cols", "2", "--out-layout", layout])
+    if layout == "chunks":
+        run(PY + [f"{B}/lib/from_chunks.py", o, f"{o}_flat"]); o = f"{o}_flat"
+    colsl = [l.split("\t")[1] for l in open(f"{o}/columns.tsv").read().splitlines()[1:]]
+    Sl = np.fromfile(f"{o}/scores.f32", dtype=np.float32).reshape(nl, len(colsl))
+    assert colsl == sorted(win), colsl
+    for j, g in enumerate(colsl):
+        assert np.allclose(Sl[:, j], np.asarray(truth_lp[g], dtype=np.float64), rtol=1e-5, atol=1e-7), (layout, g, np.abs(Sl[:, j] - truth_lp[g]).max())
+    if layout == "chunks":
+        gc = [l.split("\t") for l in open(f"{LD}/lp_chunks/gene_counts.tsv").read().splitlines()]
+        assert gc[0] == ["gene", "n_index", "n_g001"] and len(gc) == 1 + len(win)
+print(run(PY + [f"{B}/lib/make_ld_weights.py", "--mode", "ldpred2-unique"] + lcommon + ["--out", f"{LD}/w_lpu.tsv", "--genes-out", f"{LD}/g_lpu.txt"]).strip())
+snp_rows = [l.split("\t")[1] for l in open(f"{LD}/w_lpu.tsv").read().splitlines()[1:]]
+assert len(snp_rows) == len(set(snp_rows)), "ldpred2-unique: a SNP appears in two genes"
+assert len(snp_rows) < len(open(f"{LD}/w_lp.tsv").read().splitlines()) - 1
+print("34. make_ld_weights: ct == make_ct_weights; ct-unique == nearest-centre rule (report, one gene per shared SNP, unshared genes untouched); ldpred2 fixed layout flat+chunks == dense sum; ldpred2-unique one row per SNP  OK")
+
 print("\nALL SMOKE TESTS PASSED")
