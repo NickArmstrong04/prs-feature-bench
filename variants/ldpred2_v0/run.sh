@@ -26,7 +26,12 @@ PY=${BENCH_PY:-python3}; LIB=${BENCH_LIB:?}; NT=${BENCH_THREADS:-4}
 D=$(cd "$(dirname "$0")" && pwd)
 MODE=${LDPRED_MODE:-ldpred2}
 
-eval "$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(f"CHR={d[\"chr\"]}; BETA_COL_DEFAULT={d.get(\"ldpred2_col\",\"g001\")}")' "$FIX/params.json")"
+eval "$("$PY" - "$FIX/params.json" <<'EOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(f'CHR={d["chr"]}; BETA_COL_DEFAULT={d.get("ldpred2_col", "g001")}')
+EOF
+)"
 BETA_COL=${BETA_COL:-$BETA_COL_DEFAULT}
 [[ -f "$FIX/betas.txt" ]] || { echo "MISSING: $FIX/betas.txt (LDpred2 10b write output for this chromosome)"; exit 1; }
 
