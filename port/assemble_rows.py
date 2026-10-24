@@ -128,18 +128,32 @@ def npy_header(fh):
     if rd is None:
         die(f"{fh.name}: .npy version {ver} not handled")
     shape, fortran, dtype = rd(fh)
-    if fortran or dtype != np.dtype("<f4") or len(shape) != 3:
+    if dtype != np.dtype("<f4") or len(shape) != 3:
         die(f"{fh.name}: unexpected .npy layout {shape} {dtype} fortran={fortran}")
-    return shape, fh.tell()
+    return shape, fh.tell(), fortran
+
+# ct_sparse_v5 saves ST.T.astype(f32).reshape(n, G, T): for G > 1 the reshape copies to C order,
+# for G == 1 it is a view of the transpose and np.save records fortran_order=True (uc/eur chr16
+# chunk 60, 2026-10-24). Production's assembler np.loads either; the row reader below needs C
+# order, so such a chunk (n x 11 x 4 = 17 MB) is loaded whole once and sliced from memory.
+_FORTRAN_CACHE = {}
+
+def fortran_rows(path, lo, hi):
+    import numpy as np
+    if path not in _FORTRAN_CACHE:
+        _FORTRAN_CACHE[path] = np.ascontiguousarray(np.load(path))
+    return _FORTRAN_CACHE[path][lo:hi]
 
 def read_rows(path, lo, hi, G, T):
     """Rows lo:hi of a (n, G, T) float32 .npy as one contiguous read (no mmap, so
     the pages are not charged to this job's RSS the way production's were)."""
     import numpy as np
     with open(path, "rb") as fh:
-        shape, start = npy_header(fh)
+        shape, start, fortran = npy_header(fh)
         if shape[1:] != (G, T):
             die(f"{path}: shape {shape}, expected (*, {G}, {T})")
+        if fortran:
+            return fortran_rows(path, lo, hi)
         buf = np.empty((hi - lo, G, T), dtype=np.float32)
         mv = memoryview(buf).cast("B")
         fh.seek(start + lo * G * T * 4)
@@ -179,6 +193,9 @@ def cmd_rows(a):
     for p, _, _ in plans:
         with open(p, "rb") as fh:
             shapes[p] = npy_header(fh)[0][1]
+    nf = sum(1 for p in shapes if npy_header(open(p, "rb"))[2])
+    if nf:
+        log(f"{nf} chunk file(s) in fortran order (single-gene chunks from ct_sparse_v5): loaded whole, sliced in memory")
     t_read = t_gather = t_write = 0.0
     with open(c["out_path"], "r+b", buffering=0) as out:
         for s0, s1 in my:
