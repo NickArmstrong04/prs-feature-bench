@@ -18,7 +18,13 @@
 #  results.tsv, or the goldens under runs/ct_full (CLAUDE.md).
 # =============================================================================
 set -uo pipefail
-CMD=${1:?inventory|clean}; DISEASE=${2:?disease}; COHORT=${3:?cohort}; YES=${4:-}
+CMD=${1:?readiness|inventory|clean}
+if [[ "$CMD" == readiness ]]; then
+    COH=${2:?cohort}; shift 2; DIS="${*:?diseases}"
+    DISEASE=ad; COHORT=$COH          # any disease that exists: the top-level source only needs CONF_DIR
+else
+    DISEASE=${2:?disease}; COHORT=${3:?cohort}; YES=${4:-}
+fi
 ROOT=${ROOT:-/home/naa79/project_pi_sz622/naa79/prs-benchmark}
 BENCH=${BENCH:-$(cd "$(dirname "$0")/.." && pwd)}
 export DISEASE COHORT CHR=19
@@ -38,7 +44,6 @@ readiness)
     # bash port/full_run_prep.sh readiness <cohort> af ms uc ...  -- which diseases the chain can run
     # on now: the C+T outputs it reads per chromosome (gwas.QC.txt, SNP.pvalue, target_data.a1,
     # target_chr<k>.PH.bim for `snps`), the keep list / phenotype, and any production gene files.
-    COH=$DISEASE; shift 3 || true; DIS="$COHORT $*"
     echo "disease files: $(cd "$CONF_DIR/diseases" && ls *.sh | grep -v '^_' | sed 's/\.sh$//' | tr '\n' ' ')"
     for d in $DIS; do
         echo; echo "== $d/$COH"
