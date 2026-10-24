@@ -13,7 +13,8 @@
 #      bed    = 67 s   x W/156485 x 4/C
 #      clump  = max( sum_g t_g / C , max_g t_g ),  t_g = 1 s + 5.1 ms x SNPs_g
 #      score  = 361 s  x W/156485            (write-bound; CPUs barely matter)
-#      time   = 1.5 x (bed + clump + score) + 10 min, rounded up to 5 min
+#      time   = 1.3 x (bed + clump + score) + 5 min, rounded up to 5 min (the 1.5x + 10 min
+#               first used asked for ~2x the actual on 2026-10-23: chr1 est 3767 s, actual 3229 s)
 #      CPUs   = 8 if W > 300k or a gene > 200k SNPs, else 4
 #      mem    = 32 GB if a gene > 100k SNPs (C plinks on giant windows), else 16 GB
 #  W = window SNPs (window.snplist), from production's $PNET/chr<k>/ files.
@@ -49,7 +50,7 @@ for k in $CHRS; do
         tmax = 1 + 0.0051 * MAXG
         clump = TSUM / C; if (tmax > clump) clump = tmax
         score = 361 * W / 156485
-        tsec = 1.5 * (bed + clump + score) + 600
+        tsec = 1.3 * (bed + clump + score) + 300
         tmin = int((tsec + 299) / 300) * 5
         note = (MAXG > 20000) ? "giant genes" : "-"
         printf "%d %s %.0f %.0f %.0f %.0f %02d:%02d:00 %s", C, mem, bed, clump, score, tsec, int(tmin / 60), tmin % 60, note }')"

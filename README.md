@@ -899,5 +899,32 @@ scores with a golden dir (`CHAIN_GOLDEN`).
 `ct_sparse_v5` 361 s (96 chunks of 176 columns, write 170 s of it), bed
 deleted: **905 s = 15 min 5 s** against production's ~31 min for the same
 chromosome. `verify`: scores **PASS, 16,786 cols, max|diff| 0** against
-`runs/ct_full/golden_chr19` (production feats.f32). The 22-task array
-(8 CPUs / 64 GB per task) is the next submission.
+`runs/ct_full/golden_chr19` (production feats.f32).
+
+**Genome-wide (2026-10-23/24, jobs 30499668–30499689).** Submitted with
+`port/submit_chain.sh ad eur`: 22 jobs sized per chromosome from its gene
+manifest (4 or 8 CPUs, 16 or 32 GB, 20 min to 1 h 45 min). All 22 COMPLETED;
+`gene_counts.tsv` rows sum to **19,831** (every graph node); 311 GB of scores
+in scratch, every bed deleted by its own job. **Submit → last task done
+≈ 55 min**, bounded by chr1 (53:51); the 22 elapsed times sum to ≈ 6.4 h
+of job time against production's ≈ 44 h across its 12a/12bt/12bg/12c arrays
+(sacct, reruns included).
+
+| chr | elapsed | 12a bed | 12b clump | 12c score | note |
+|---|---|---|---|---|---|
+| 1 | 53:51 | 164 s | 2153 s | 907 s | 8 giant genes, 545,489 window SNPs; 8 CPUs |
+| 8 | 41:32 | 329 s | 1827 s | 332 s | SRGAP2B-class giant 422,869 SNPs |
+| 5 | 30:28 | 152 s | 1374 s | 299 s | giant 388,217 |
+| 7 / 9 / 11 / 10 | 25–28 min | 200–300 s | 900–1150 s | 230–320 s | one giant each |
+| 14 / 17 | 21–22 min | | | | giants 245,965 / 192,278 (17 at 4 CPUs) |
+| 19 | 15:05 (salloc) | 67 s | 475 s | 361 s | ERICH4 |
+| 2, 4, 12, 13, 15, 16, 18, 20, 21, 22 | 4–9 min | 46–300 s | 36–130 s | 62–285 s | no giant |
+
+The clump stage of a giant-bearing chromosome is the only item above ten
+minutes left; it is production's own plink, one process per gene, so the
+remaining lever is CPUs per job (the giants of one chromosome run
+concurrently). The submitter's raw estimates were within ~15 % for the big
+chromosomes and high for the small ones; its 1.5× + 10 min margin made the
+requests about twice the actual, so the margin is now 1.3× + 5 min. 12d
+(production's `assemble` over the scratch run dir, job 30508884) and the
+byte comparison of its `feats.f32` with production's are pending.
