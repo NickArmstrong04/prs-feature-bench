@@ -11,7 +11,7 @@
 #
 #  A disease production never ran PRS-Net on (af, ms, uc ...) has no gene files under
 #  $PNET/chr<k>; the sizing needs them, so first `--snps-only` submits STEP=snps as a
-#  22-task array (1 CPU, ~1 min each) writing them under $CHAIN_OUT/chr<k>, and once it
+#  22-task array (1 CPU, well under a minute each, 5 min requested) writing them under $CHAIN_OUT/chr<k>, and once it
 #  is done a plain submit finds them there. $CHAIN_OUT in the environment is passed on
 #  (--export=ALL), so set it explicitly to keep runs apart; BENCH is this checkout.
 #
@@ -63,9 +63,9 @@ mkdir -p "$BENCH/logs"
 cd "$BENCH"
 echo "run dir: $OUT   bench: $BENCH"
 if (( SNPS == 1 )); then
-    echo "gene files -> $OUT/chr<k>/{genes,gene_manifest.tsv,window.snplist}  (STEP=snps, array 1-22, 1 CPU, 16G, 30 min)"
+    echo "gene files -> $OUT/chr<k>/{genes,gene_manifest.tsv,window.snplist}  (STEP=snps, array 1-22, 1 CPU, 8G, 5 min)"
     (( DRY == 1 )) && exit 0
-    J=$(sbatch --parsable --job-name="pnet_snps" --array=1-22 --cpus-per-task=1 --mem=16G --time=0:30:00 \
+    J=$(sbatch --parsable --job-name="pnet_snps" --array=1-22 --cpus-per-task=1 --mem=8G --time=0:05:00 \
                --export=ALL,DISEASE="$DISEASE",COHORT="$COHORT",STEP=snps,BENCH="$BENCH" port/prsnet_chain.sbatch)
     echo "submitted ${J%%;*}; when COMPLETED (sacct -j ${J%%;*} -X --format=JobID,Elapsed,State), run the plain submit"
     exit 0
