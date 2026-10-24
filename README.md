@@ -925,6 +925,26 @@ minutes left; it is production's own plink, one process per gene, so the
 remaining lever is CPUs per job (the giants of one chromosome run
 concurrently). The submitter's raw estimates were within ~15 % for the big
 chromosomes and high for the small ones; its 1.5× + 10 min margin made the
-requests about twice the actual, so the margin is now 1.3× + 5 min. 12d
-(production's `assemble` over the scratch run dir, job 30508884) and the
-byte comparison of its `feats.f32` with production's are pending.
+requests about twice the actual, so the margin is now 1.3× + 5 min. Each
+plink is now capped at `--memory 2500` (CHAIN_PLINK_MB) and memory is
+requested by CPU count (16 GB at 4, 24 GB at 8): plink pre-allocates its
+whole `--memory` share, so MaxRSS equalled the request on every job and said
+nothing about need.
+
+**12d and the verdict (2026-10-24, job 30508884, 4 CPUs / 32 GB).**
+Production's `12_prsnet.py assemble --export memmap --sample-block 5000`
+over the scratch run dir: **1737 s = 28.9 min**, MaxRSS 32 GB (the memmap's
+pages count; the request was 32 GB). `genes_not_in_order.txt` and
+`genes_without_features.txt` empty; `info.csv` identical to production's.
+A dependent `cmp` job (8 min) over the two 332,413,726,568-byte files:
+**`FEATS_IDENTICAL`** — the chain's genome-wide `feats.f32` is byte for byte
+production's. `feats.meta.json` differs only in the two absolute paths it
+records. So the complete PRS-Net feature chain (12a → 12b → 12c → 12d)
+reproduces production exactly in **≈ 55 min of chain + 29 min of 12d ≈ 1 h
+25 min submit → feats.f32**, against ~44 h of job time (days of wall) in
+production's arrays. 12b is production's plink, 12d is production's
+assembler; only 12a (`bed_seek_v1`) and 12c (`ct_sparse_v5`) are new code,
+and both are checked against production's own artefacts. Left on the
+table: 12d's 332 GB write (0.5 h) could be folded into 12c by writing each
+chromosome's columns straight into a preallocated `feats.f32`, and the
+clump stage of the giant chromosomes is bounded by plink on one gene.
