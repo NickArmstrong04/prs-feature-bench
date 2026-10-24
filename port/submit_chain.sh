@@ -7,6 +7,13 @@
 #
 #      bash port/submit_chain.sh <disease> <cohort> [--dry-run] [--chr 1,2,19]
 #             [--no-12d | --12d-only] [--parts 8] [--cmp /prod/feats.f32] [--genome-dir DIR]
+#             [--snps-only]
+#
+#  A disease production never ran PRS-Net on (af, ms, uc ...) has no gene files under
+#  $PNET/chr<k>; the sizing needs them, so first `--snps-only` submits STEP=snps as a
+#  22-task array (1 CPU, ~1 min each) writing them under $CHAIN_OUT/chr<k>, and once it
+#  is done a plain submit finds them there. $CHAIN_OUT in the environment is passed on
+#  (--export=ALL), so set it explicitly to keep runs apart; BENCH is this checkout.
 #
 #  After the chromosome jobs it chains 12d as three dependent steps of
 #  port/assemble_rows.py (prep -> rows array of --parts tasks -> finish), so one
@@ -33,7 +40,7 @@
 # =============================================================================
 set -euo pipefail
 DISEASE=${1:?disease}; COHORT=${2:?cohort}; shift 2
-DRY=0; CHRS=$(seq 1 22 | tr '\n' ' '); DO_CHR=1; DO_12D=1; PARTS=8; CMP=""; GDIR=""
+DRY=0; CHRS=$(seq 1 22 | tr '\n' ' '); DO_CHR=1; DO_12D=1; PARTS=8; CMP=""; GDIR=""; SNPS=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
@@ -43,6 +50,7 @@ while [[ $# -gt 0 ]]; do
         --parts) PARTS=$2; shift 2 ;;
         --cmp) CMP=$2; shift 2 ;;
         --genome-dir) GDIR=$2; shift 2 ;;
+        --snps-only) SNPS=1; shift ;;
         *) echo "unknown option $1"; exit 1 ;;
     esac
 done
@@ -50,15 +58,25 @@ done
 ROOT=${ROOT:-/home/naa79/project_pi_sz622/naa79/prs-benchmark}
 BENCH=${BENCH:-$(cd "$(dirname "$0")/.." && pwd)}
 PNET=$ROOT/data/processed/$DISEASE/$COHORT/prsnet
-[[ -d "$PNET" ]] || { echo "no $PNET -- run 12a's snps step first (or point ROOT elsewhere)"; exit 1; }
+OUT=${CHAIN_OUT:-/home/naa79/scratch_pi_sz622/naa79/prs-feature-bench/prsnet_chain/${DISEASE}_${COHORT}}
 mkdir -p "$BENCH/logs"
 cd "$BENCH"
+echo "run dir: $OUT   bench: $BENCH"
+if (( SNPS == 1 )); then
+    echo "gene files -> $OUT/chr<k>/{genes,gene_manifest.tsv,window.snplist}  (STEP=snps, array 1-22, 1 CPU, 16G, 30 min)"
+    (( DRY == 1 )) && exit 0
+    J=$(sbatch --parsable --job-name="pnet_snps" --array=1-22 --cpus-per-task=1 --mem=16G --time=0:30:00 \
+               --export=ALL,DISEASE="$DISEASE",COHORT="$COHORT",STEP=snps,BENCH="$BENCH" port/prsnet_chain.sbatch)
+    echo "submitted ${J%%;*}; when COMPLETED (sacct -j ${J%%;*} -X --format=JobID,Elapsed,State), run the plain submit"
+    exit 0
+fi
 printf '%-5s %9s %6s %9s %5s %5s %6s %6s %6s %8s %7s %s\n' chr windowSNPs genes maxgene CPUs mem bed_s clump_s scor_s time jobid note
 TOT_EST=0; IDS=()
 (( DO_CHR == 1 )) || CHRS=""
 for k in $CHRS; do
-    M=$PNET/chr$k/gene_manifest.tsv; WF=$PNET/chr$k/window.snplist
-    [[ -f "$M" && -f "$WF" ]] || { printf '%-5s %s\n' "$k" "no gene_manifest.tsv / window.snplist under $PNET/chr$k -- skipped"; continue; }
+    M=$PNET/chr$k/gene_manifest.tsv; WF=$PNET/chr$k/window.snplist                       # production's (ad)
+    [[ -f "$M" && -f "$WF" ]] || { M=$OUT/chr$k/gene_manifest.tsv; WF=$OUT/chr$k/window.snplist; }   # or --snps-only's
+    [[ -f "$M" && -f "$WF" ]] || { printf '%-5s %s\n' "$k" "no gene_manifest.tsv / window.snplist under $PNET/chr$k or $OUT/chr$k -- run --snps-only first; skipped"; continue; }
     W=$(wc -l < "$WF")
     read -r G MAXG TSUM <<< "$(awk 'NR>1 && $4>0 {g++; t+=1+0.0051*$4; if ($4>m) m=$4} END{printf "%d %d %.0f", g, m, t}' "$M")"
     read -r C MEM BED CLUMP SCORE TSEC TIME NOTE <<< "$(awk -v W="$W" -v MAXG="$MAXG" -v TSUM="$TSUM" 'BEGIN{
@@ -76,7 +94,7 @@ for k in $CHRS; do
     JOB=dry
     if (( DRY == 0 )); then
         JOB=$(sbatch --parsable --job-name="pnet_c$k" --array="$k" --cpus-per-task="$C" --mem="$MEM" --time="$TIME" \
-                     --export=ALL,DISEASE="$DISEASE",COHORT="$COHORT" port/prsnet_chain.sbatch)
+                     --export=ALL,DISEASE="$DISEASE",COHORT="$COHORT",BENCH="$BENCH" port/prsnet_chain.sbatch)
         JOB=${JOB%%;*}; IDS+=("${JOB%%_*}")
     fi
     printf '%-5s %9d %6d %9d %5d %5s %6d %6d %6d %8s %7s %s\n' "$k" "$W" "$G" "$MAXG" "$C" "$MEM" "$BED" "$CLUMP" "$SCORE" "$TIME" "${JOB%%_*}" "$NOTE"
@@ -85,7 +103,7 @@ done
 
 # --- 12d as prep -> rows[0..PARTS-1] -> finish, each waiting on the one before --------
 if (( DO_12D == 1 )); then
-    EXP="ALL,DISEASE=$DISEASE,COHORT=$COHORT,CHAIN_PARTS=$PARTS"
+    EXP="ALL,DISEASE=$DISEASE,COHORT=$COHORT,CHAIN_PARTS=$PARTS,BENCH=$BENCH"
     [[ -n "$GDIR" ]] && EXP+=",CHAIN_GENOME_DIR=$GDIR"
     [[ -n "$CMP" ]] && EXP+=",CHAIN_CMP=$CMP"
     DEP=""; (( ${#IDS[@]} > 0 )) && DEP="--dependency=afterok:$(IFS=:; echo "${IDS[*]}")"

@@ -111,7 +111,7 @@ inventory)
     echo
     echo "== training jobs in sacct (how production's train was submitted)"
     sacct -u "$USER" -S 2026-09-01 --format=JobID%14,JobName%22,Partition,AllocTRES%40,Elapsed,State -X 2>/dev/null \
-        | grep -i 'train\|prsnet_t\|13_' | awk 'NR<=20' || echo "  (sacct unavailable)"
+        | grep -i 'gpu' | awk 'NR<=20' || echo "  (sacct unavailable)"
     echo
     echo "== scratch state (what clean would remove) and disk"
     [[ -d "$OUT" ]] && du -sh "$OUT"/chr* "$OUT"/genome 2>/dev/null | sort -k2 || echo "  $OUT: absent"

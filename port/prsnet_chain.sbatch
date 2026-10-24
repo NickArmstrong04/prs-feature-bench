@@ -12,6 +12,9 @@
 #      then the chromosome's bed is deleted (52 GB for chr1; the file system is 99 % full)
 #      12d  assemble        production's 12_prsnet.py assemble (STEP=12d), or the same bytes from
 #                           port/assemble_rows.py as prep -> rows array -> finish (submit_chain.sh)
+#      snps (STEP=snps)     only the gene files (genes/, gene_manifest.tsv, window.snplist) under the
+#                           run dir, for a disease production never ran PRS-Net on: submit_chain.sh
+#                           --snps-only submits it as a 22-task array, then a plain submit sizes from them
 #
 #  DRAFT (2026-10-23): assembled from the chr19 full-cohort runs in README s11;
 #  NOT yet run under sbatch. Variable names follow $ROOT/scripts/slurm/config.sh.
@@ -48,7 +51,7 @@ set -euo pipefail
 
 STEP=${1:-${STEP:-chr}}
 : "${DISEASE:?}" "${COHORT:?}"
-if [[ "$STEP" == chr || "$STEP" == verify ]]; then
+if [[ "$STEP" == chr || "$STEP" == verify || "$STEP" == snps ]]; then
     CHR=${CHR:-${SLURM_ARRAY_TASK_ID:?set CHR=<n> or run as an array}}
 else
     CHR=${CHR:-1}                       # 12d is genome-wide; config.sh still wants a CHR
@@ -92,8 +95,8 @@ need_module() {
 #      fills contiguous sample slices, finish writes feats.meta.json and, with
 #      CHAIN_CMP=<production feats.f32>, runs cmp. submit_chain.sh chains them.
 if [[ "$STEP" == 12d || "$STEP" == prep || "$STEP" == rows || "$STEP" == finish ]]; then
-    for c in $(seq 1 22); do
-        [[ -f "$OUT/chr$c/scores/scores_manifest.tsv" ]] || { echo "chr$c has no scores yet: $OUT/chr$c/scores/scores_manifest.tsv"; exit 1; }
+    for c in $(seq 1 22); do   # samples.txt is written after the last chunk; scores_manifest.tsv is opened first
+        [[ -f "$OUT/chr$c/scores/samples.txt" ]] || { echo "chr$c has no complete scores yet: $OUT/chr$c/scores/samples.txt"; exit 1; }
     done
     [[ -n "${PHENO:-}" && -f "$PHENO" ]] || { echo "no phenotype for $DISEASE/$COHORT (PHENO unset or missing)"; exit 1; }
     [[ -f "$PRSNET_GENE_ORDER" ]] || { echo "MISSING: $PRSNET_GENE_ORDER"; exit 1; }
@@ -148,9 +151,11 @@ mkdir -p "$C/clumps" "$C/scores"
 echo "== prsnet chain $DISEASE/$COHORT chr$CHR  $CPUS CPUs  ${MEM_MB} MB  ($(date))"
 echo "raw:    $GENO_PREFIX"; echo "keep:   $KEEP_LIST ($(wc -l < "$KEEP_LIST") lines)"; echo "out:    $C"
 
-# gene files: production's 12a `snps` outputs survive at $PNET_CHR; make them there only if absent
+# gene files: production's 12a `snps` outputs survive at $PNET_CHR for a disease production ran PRS-Net on;
+# otherwise they are made here, under $C (STEP=snps makes just them, a 22-task array of a minute each,
+# so submit_chain.sh can size the chromosome jobs from the manifests before it submits them)
 GENES=$PNET_CHR/genes; MANIFEST=$PNET_CHR/gene_manifest.tsv; WINDOW=$PNET_CHR/window.snplist
-if [[ ! -f "$MANIFEST" || ! -f "$WINDOW" ]]; then
+if [[ ! -f "$MANIFEST" || ! -f "$WINDOW" || "$STEP" == snps ]]; then
     GENES=$C/genes; MANIFEST=$C/gene_manifest.tsv; WINDOW=$C/window.snplist
     if [[ ! -f "$MANIFEST" || "$FORCE" == 1 ]]; then
         echo "no production gene files for chr$CHR -- making them with 12_prsnet.py snps"
@@ -162,6 +167,10 @@ if [[ ! -f "$MANIFEST" || ! -f "$WINDOW" ]]; then
         lap "gene files"
     fi
 fi
+if [[ "$STEP" == snps ]]; then
+    echo "snps:   $MANIFEST ($(awk 'NR>1 && $4>0' "$MANIFEST" | wc -l) genes with SNPs; $(wc -l < "$WINDOW") window SNPs; largest $(awk 'NR>1 && $4>0 {print $1, $4}' "$MANIFEST" | sort -k2,2nr | awk 'NR<=3' | tr '\n' ' '))"
+    exit 0
+fi
 for f in "$GENO_PREFIX.bed" "$GENO_PREFIX.bim" "$GENO_PREFIX.fam" "$GQC/gwas.QC.txt" "$GQC/SNP.pvalue" "$MIS/target_data.a1" "$KEEP_LIST" "$MANIFEST" "$WINDOW"; do
     [[ -f "$f" ]] || { echo "MISSING: $f"; exit 1; }
 done
@@ -170,7 +179,7 @@ echo "genes:  $MANIFEST ($(awk 'NR>1 && $4>0' "$MANIFEST" | wc -l) with SNPs; $(
 # --- 12a: the cohort bed, seeked out of the raw release ------------------------
 if [[ -f "$BED.bed" && -f "$BED.bim" && -f "$BED.fam" && "$FORCE" != 1 ]]; then
     echo "12a: $BED.bed exists -- kept"
-elif [[ -f "$C/scores/scores_manifest.tsv" && "$FORCE" != 1 ]]; then
+elif [[ -f "$C/scores/samples.txt" && "$FORCE" != 1 ]]; then
     echo "12a: scores already exist for chr$CHR and the bed was deleted -- nothing to do"; exit 0
 else
     BENCH_THREADS=$CPUS "$PRSNET_PY" "$BENCH/variants/bed_seek_v1/bed_seek.py" \
@@ -212,9 +221,10 @@ echo "12b: $(awk -F'\t' 'NR>1 && $NF=="ok"' "$C/clump_manifest.tsv" | wc -l) ok,
 lap "12b plink clump"
 
 # --- 12c: ct_sparse_v5 kernel, 12c's chunk layout -------------------------------
-if [[ -f "$C/scores/scores_manifest.tsv" && "$FORCE" != 1 ]]; then
-    echo "12c: $C/scores/scores_manifest.tsv exists -- kept"
+if [[ -f "$C/scores/samples.txt" && "$FORCE" != 1 ]]; then
+    echo "12c: $C/scores/samples.txt exists (written after the last chunk) -- kept"
 else
+    rm -rf "$C/scores"; mkdir -p "$C/scores"     # a partial scores/ left by a killed job is worthless
     "$PRSNET_PY" "$BENCH/lib/make_ct_weights.py" --clumps "$C/clumps" --manifest "$C/clump_manifest.tsv" \
         --gwas "$GQC/gwas.QC.txt" --pvalue "$GQC/SNP.pvalue" --thresholds "$PRSNET_THRESHOLDS" \
         --out "$C/ct_weights.tsv" --genes-out "$C/genes_all.txt"
