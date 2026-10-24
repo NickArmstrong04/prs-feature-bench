@@ -7,7 +7,10 @@
 #
 #      bash port/submit_chain.sh <disease> <cohort> [--dry-run] [--chr 1,2,19]
 #             [--no-12d | --12d-only] [--parts 8] [--cmp /prod/feats.f32] [--genome-dir DIR]
-#             [--snps-only]
+#             [--snps-only] [--scale 1.5]
+#
+#  --scale multiplies every chromosome job's time request (default 1.0; the model's
+#  1.3x + 5 min margin was ~15 % high on the big AD chromosomes and ran out on uc chr1).
 #
 #  A disease production never ran PRS-Net on (af, ms, uc ...) has no gene files under
 #  $PNET/chr<k>; the sizing needs them, so first `--snps-only` submits STEP=snps as a
@@ -40,7 +43,7 @@
 # =============================================================================
 set -euo pipefail
 DISEASE=${1:?disease}; COHORT=${2:?cohort}; shift 2
-DRY=0; CHRS=$(seq 1 22 | tr '\n' ' '); DO_CHR=1; DO_12D=1; PARTS=8; CMP=""; GDIR=""; SNPS=0
+DRY=0; CHRS=$(seq 1 22 | tr '\n' ' '); DO_CHR=1; DO_12D=1; PARTS=8; CMP=""; GDIR=""; SNPS=0; SCALE=1.0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
@@ -51,6 +54,7 @@ while [[ $# -gt 0 ]]; do
         --cmp) CMP=$2; shift 2 ;;
         --genome-dir) GDIR=$2; shift 2 ;;
         --snps-only) SNPS=1; shift ;;
+        --scale) SCALE=$2; shift 2 ;;
         *) echo "unknown option $1"; exit 1 ;;
     esac
 done
@@ -79,14 +83,14 @@ for k in $CHRS; do
     [[ -f "$M" && -f "$WF" ]] || { printf '%-5s %s\n' "$k" "no gene_manifest.tsv / window.snplist under $PNET/chr$k or $OUT/chr$k -- run --snps-only first; skipped"; continue; }
     W=$(wc -l < "$WF")
     read -r G MAXG TSUM <<< "$(awk 'NR>1 && $4>0 {g++; t+=1+0.0051*$4; if ($4>m) m=$4} END{printf "%d %d %.0f", g, m, t}' "$M")"
-    read -r C MEM BED CLUMP SCORE TSEC TIME NOTE <<< "$(awk -v W="$W" -v MAXG="$MAXG" -v TSUM="$TSUM" 'BEGIN{
+    read -r C MEM BED CLUMP SCORE TSEC TIME NOTE <<< "$(awk -v W="$W" -v MAXG="$MAXG" -v TSUM="$TSUM" -v S="$SCALE" 'BEGIN{
         C = (W > 300000 || MAXG > 200000) ? 8 : 4
         mem = (C == 8) ? "24G" : "16G"      # plink capped at 2.5 GB each (CHAIN_PLINK_MB); python stages < 10 GB
         bed = 67 * W / 156485 * 4 / C
         tmax = 1 + 0.0051 * MAXG
         clump = TSUM / C; if (tmax > clump) clump = tmax
         score = 361 * W / 156485
-        tsec = 1.3 * (bed + clump + score) + 300
+        tsec = (1.3 * (bed + clump + score) + 300) * S
         tmin = int((tsec + 299) / 300) * 5
         note = (MAXG > 20000) ? "giant genes" : "-"
         printf "%d %s %.0f %.0f %.0f %.0f %02d:%02d:00 %s", C, mem, bed, clump, score, tsec, int(tmin / 60), tmin % 60, note }')"
