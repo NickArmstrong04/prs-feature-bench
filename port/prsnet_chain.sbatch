@@ -16,7 +16,7 @@
 #  NOT yet run under sbatch. Variable names follow $ROOT/scripts/slurm/config.sh.
 #
 #  Submit (from $BENCH, after `mkdir -p logs`):
-#      sbatch --export=ALL,DISEASE=ad,COHORT=eur port/prsnet_chain.sbatch            # chr1..22
+#      bash port/submit_chain.sh ad eur [--dry-run]       # 22 jobs, each sized for its chromosome
 #      sbatch --export=ALL,DISEASE=ad,COHORT=eur --array=19 port/prsnet_chain.sbatch  # one chromosome
 #      sbatch --export=ALL,DISEASE=ad,COHORT=eur,STEP=12d --array=1 --cpus-per-task=4 --mem=32G \
 #             --time=4:00:00 port/prsnet_chain.sbatch                                 # after all 22
@@ -28,17 +28,19 @@
 #  delete the bed), CHAIN_MAX_GAP (64), CHAIN_CHUNK_GB (1.0), CHAIN_FORCE=1 (redo stages
 #  whose outputs exist; the default resumes).
 #
-#  Resources: chr19 at 380,962 people on 4 CPUs took 76 s (bed) + 7:52 (clump) +
-#  5:40 (score) = ~15 min and ~15 GB of scratch while the bed existed. chr1 is 3.5x
+#  Resources (see submit_chain.sh for the model): chr19 on 4 CPUs took 67 s (bed) + 475 s (clump) +
+#  361 s (score) = 905 s and ~15 GB of scratch while the bed existed. chr1 is 3.5x
 #  the SNPs and holds 8 of the 30 giant genes (300k-469k window SNPs each, 7-30 min
-#  of one plink each in production), so its clump stage bounds the array: the time
-#  limit below is for chr1; the others finish in a fraction of it.
+#  of one plink each in production), so its clump stage bounds the whole run.
 # =============================================================================
+#  Submit through port/submit_chain.sh: it sizes each chromosome's CPUs, memory
+#  and time from its gene manifest and overrides the defaults below, which are
+#  for a chr19-sized chromosome only.
 #SBATCH --job-name=prsnet_chain
-#SBATCH --array=1-22
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=8:00:00
+#SBATCH --array=19
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --time=0:45:00
 #SBATCH --output=logs/prsnet_chain_%A_%a.out
 #SBATCH --error=logs/prsnet_chain_%A_%a.err
 set -euo pipefail
