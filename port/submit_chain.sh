@@ -34,8 +34,9 @@
 #      bed    = 67 s   x W/156485 x 4/C
 #      clump  = max( sum_g t_g / C , max_g t_g ),  t_g = 1 s + 5.1 ms x SNPs_g
 #      score  = 361 s  x W/156485            (write-bound; CPUs barely matter)
-#      time   = 1.3 x (bed + clump + score) + 5 min, rounded up to 5 min (the 1.5x + 10 min
-#               first used asked for ~2x the actual on 2026-10-23: chr1 est 3767 s, actual 3229 s)
+#      time   = 1.3 x (bed + clump + score) + 5 min, rounded up to 5 min; 1.5x + 10 min when a gene
+#               has > 100k SNPs (uc/eur chr1 used 80 of its 85 min on 2026-10-24: the clump and score
+#               stages ran 1.5x slower than ad's chr1 the day before on the same sizes)
 #      CPUs   = 8 if W > 300k or a gene > 200k SNPs, else 4
 #      mem    = 16 GB at 4 CPUs, 24 GB at 8 (each plink capped at 2.5 GB; the first run
 #               requested 32 GB for giant chromosomes and MaxRSS simply equalled the request)
@@ -92,7 +93,10 @@ for k in $CHRS; do
         tmax = 1 + 0.0051 * MAXG
         clump = TSUM / C; if (tmax > clump) clump = tmax
         score = 361 * W / 156485
-        tsec = (1.3 * (bed + clump + score) + 300) * S
+        # giant chromosomes: 1.5x + 10 min (uc chr1 2026-10-24: 12b 3282 s vs 2217 est, 12c 1362 vs 1167,
+        # 80 min of an 85 min request); the rest keep 1.3x + 5 min (all 21 finished at 25-75 % of theirs)
+        if (MAXG > 100000) tsec = (1.5 * (bed + clump + score) + 600) * S
+        else               tsec = (1.3 * (bed + clump + score) + 300) * S
         tmin = int((tsec + 299) / 300) * 5
         note = (MAXG > 20000) ? "giant genes" : "-"
         printf "%d %s %.0f %.0f %.0f %.0f %02d:%02d:00 %s", C, mem, bed, clump, score, tsec, int(tmin / 60), tmin % 60, note }')"
