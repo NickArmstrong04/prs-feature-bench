@@ -775,3 +775,41 @@ Full-cohort outputs therefore live in Nick's scratch space
 (`/home/naa79/scratch_pi_sz622/naa79/prs-feature-bench/`), symlinked from
 `runs/` where a path is needed; fixture-scale runs stay in `runs/` (the
 harness deletes their bulk on PASS).
+
+**Stage 3 reproduced on chr19 (2026-10-23, commit cc8065f).** Golden:
+`feats_extract.py` cut chr19's 1,526 genes × 11 thresholds out of
+`feats.f32` (25.6 GB, 1088 s — the memmap row reads ran at 0.33 GB/s, a
+tenth of `dd`; a `fromfile` reader would do it in ~2 min). Candidate:
+`ct_sparse_v5` on the v1 bed with the verified clumps, chunk layout to
+scratch: kernel read 16.0 s, decode+impute 67.3 s, scatter 62.3 s, write
+159.6 s (48 × 536 MB `np.save`, ~160 MB/s), 340 s in all, 5 min 40 s wall
+with the weights step, against 12c's `ad_eur_pnet_12c_19` at 5 min 53 s on
+the same 4 CPUs. **`compare.py`: PASS, 16,786 cols, 0 bad, max|diff|
+0.000e+00** — bit-identical to production's features, read in row blocks in
+3 min 13 s. `scores_manifest.tsv`: 1,526 genes both; 59,871 index-SNP reads
+against production's 60,084 (different gene chunking); `gene_counts.tsv`
+ERICH4 identical (22019 index; 13 28 99 525 1953 3448 6280 8873 11256 13542
+22019). On the fixtures v5 PASSes fixture_20k bit for bit (row
+`20261023_201704`, 48.5 s at 4 threads, RSS 923 MB; v3's rows are at 2
+threads so no wall comparison) and ran fixture_100k (3:22, no `golden/ct`
+there).
+
+**Where the chr19 chain stands (4 CPUs, same salloc vs production's jobs):**
+
+| stage | production | bench | note |
+|---|---|---|---|
+| 12a cohort bed | 11 min 37 s | **76 s** (`bed_seek_v1`) | byte-identical |
+| 12b clump, 1,525 genes | ~13 min (2 × 12bt at 4 CPUs + ERICH4 9:44 alone) | 7 min 52 s (same plink, 4 at a time) | 1,525/1,525 `.clumped` identical |
+| 12c scores | 5 min 53 s | 5 min 40 s (`ct_sparse_v5`) | bit-identical; compute 146 s, write 160 s |
+| chr19 total | ~31 min | ~15 min | |
+
+The bed stage is 9× and done. The clump stage runs production's own plink,
+so its cost is unchanged; genome-wide the giant genes (`12bg`, 23 h summed
+on 1 CPU each) are the single largest item left, and only a numpy clump
+that reproduces plink's index-SNP selection exactly would remove it (the
+1,525 chr19 `.clumped` files plus every other chromosome's are the goldens).
+The scoring stage's compute is 2.4× faster than 12c's but the stage is
+write-bound: 25.6 GB per chromosome at ~160 MB/s, the same bytes 12c wrote
+and 12d writes again when it assembles `feats.f32` (332 GB, 0.4 h). A
+scorer that writes `feats.f32` once, in people-row blocks across all
+chromosomes, would save one of the two 332 GB writes.
