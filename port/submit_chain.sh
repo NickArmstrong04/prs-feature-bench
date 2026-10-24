@@ -16,7 +16,8 @@
 #      time   = 1.3 x (bed + clump + score) + 5 min, rounded up to 5 min (the 1.5x + 10 min
 #               first used asked for ~2x the actual on 2026-10-23: chr1 est 3767 s, actual 3229 s)
 #      CPUs   = 8 if W > 300k or a gene > 200k SNPs, else 4
-#      mem    = 32 GB if a gene > 100k SNPs (C plinks on giant windows), else 16 GB
+#      mem    = 16 GB at 4 CPUs, 24 GB at 8 (each plink capped at 2.5 GB; the first run
+#               requested 32 GB for giant chromosomes and MaxRSS simply equalled the request)
 #  W = window SNPs (window.snplist), from production's $PNET/chr<k>/ files.
 #  Afterwards, calibrate with:  sacct -j <ids> --format=JobID%14,JobName,Elapsed,TotalCPU,MaxRSS,State
 # =============================================================================
@@ -45,7 +46,7 @@ for k in $CHRS; do
     read -r G MAXG TSUM <<< "$(awk 'NR>1 && $4>0 {g++; t+=1+0.0051*$4; if ($4>m) m=$4} END{printf "%d %d %.0f", g, m, t}' "$M")"
     read -r C MEM BED CLUMP SCORE TSEC TIME NOTE <<< "$(awk -v W="$W" -v MAXG="$MAXG" -v TSUM="$TSUM" 'BEGIN{
         C = (W > 300000 || MAXG > 200000) ? 8 : 4
-        mem = (MAXG > 100000) ? "32G" : "16G"
+        mem = (C == 8) ? "24G" : "16G"      # plink capped at 2.5 GB each (CHAIN_PLINK_MB); python stages < 10 GB
         bed = 67 * W / 156485 * 4 / C
         tmax = 1 + 0.0051 * MAXG
         clump = TSUM / C; if (tmax > clump) clump = tmax

@@ -164,7 +164,7 @@ echo "bed:    $(wc -l < "$BED.bim") variants x $(wc -l < "$BED.fam") people  ($(
 
 # --- 12b: production's plink --clump per gene, all genes, largest first --------
 need_module
-PLINK_MEM_EACH=$(( MEM_MB * 85 / 100 / CPUS ))
+PLINK_MEM_EACH=$(( MEM_MB * 85 / 100 / CPUS )); (( PLINK_MEM_EACH <= ${CHAIN_PLINK_MB:-2500} )) || PLINK_MEM_EACH=${CHAIN_PLINK_MB:-2500}   # plink allocates its whole --memory up front: the 2026-10-23 jobs showed MaxRSS == request
 clump_one() {
     local g=$1
     local out=$C/clumps/$g
