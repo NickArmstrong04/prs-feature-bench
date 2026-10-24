@@ -948,3 +948,86 @@ and both are checked against production's own artefacts. Left on the
 table: 12d's 332 GB write (0.5 h) could be folded into 12c by writing each
 chromosome's columns straight into a preallocated `feats.f32`, and the
 clump stage of the giant chromosomes is bounded by plink on one gene.
+
+## 12. The chain on a disease production never ran PRS-Net on: uc/eur (2026-10-24)
+
+The point of §11 was to reproduce production's AD features without the hours.
+This section runs the same chain on ulcerative colitis, for which only the C+T
+pipeline (steps 01–04, 08) had been run, and trains production's PRS-Net on the
+result, so that a PRS-Net number exists for a second disease and can be set
+beside its C+T number and beside AD's. Nothing in the chain is disease-specific:
+`port/prsnet_chain.sbatch` makes the gene files itself when `$PNET/chr<k>` has
+none (`STEP=snps`, production's `12_prsnet.py snps`), and `submit_chain.sh`
+sizes the jobs from those manifests (`--snps-only` first, then a plain submit).
+The run lives in scratch under `prsnet_chain/uc_eur/`; the Bouchet checkout is
+Nick's LD-work branch, so main runs from a worktree
+(`git worktree add ../prs-feature-bench-main origin/main`) with `CHAIN_OUT`
+exported per disease.
+
+**Readiness** (`port/full_run_prep.sh readiness eur af ms uc`): af, ms and uc
+each have all 22 chromosomes of gwas.QC.txt / SNP.pvalue / target_data.a1 /
+target_chr<k>.PH.bim, a keep list of 390,637 people and a phenotype; cases
+af 32,689, uc 4,385, ms 1,717. uc was chosen as the closest to AD's 3,162
+cases. The snps step ran in well under a minute per chromosome in an salloc
+(the `--snps-only` array now asks 5 min / 8 GB per task).
+
+**Chromosome jobs** (22 jobs, 30641700–30641721, submitted 17:13, chr1 done
+18:36 = **1 h 23 min submit → last chromosome**; elapsed summed ≈ 7.0 h of
+job time). uc's window sizes track AD's (chr1 506,027 window SNPs against AD's
+545,489; the same giant genes, SRGAP2B 434,564). Every job COMPLETED inside
+its request; chr1 at 80 of 85 min was the only close one:
+
+| chr | request | elapsed | 12a | 12b | 12c | note |
+|---|---|---|---|---|---|---|
+| 1 | 1:25 | 1:20:01 | 152 s | 3282 s | 1362 s | 8 CPUs; 12b/12c both ~1.5× AD's chr1 of the day before at the same sizes |
+| 8 | 1:15 | 51:47 | | | | giant 394,791 |
+| 5 | 1:10 | 37:58 | | | | giant 352,019 |
+| 9 / 7 / 11 / 10 | 0:55 | 33:21 / 28:05 / 28:21 / 27:14 | | | | one giant each |
+| 14 / 17 / 3 | 0:45 / 0:40 / 0:40 | 23:59 / 22:30 / 17:33 | | | | |
+| 2, 4, 6, 12, 13, 15, 16, 18, 19, 20, 21, 22 | 0:15–0:40 | 2:07–14:44 | | | | |
+
+The sizing model (calibrated on AD chr19, §11) was within 25 % on the big
+chromosomes and 2–4× high on the small ones, which backfill anyway. Because
+chr1's clump and score stages ran 1.5× slower than AD's chr1 on the same
+sizes (node and file-system variation, not the data: every other chromosome
+was well inside), giant-gene chromosomes (a gene > 100k SNPs) now request
+1.5× + 10 min (chr1 → 1 h 40) and the rest keep 1.3× + 5 min; `--scale`
+multiplies all requests, `--after` queues 12d behind a rerun.
+
+**12d** (prep → 8 rows tasks → finish, `port/assemble_rows.py`): prep 23 s;
+rows 5:13–7:24 each (2 CPUs, 12 GB, 15 min requested); finish 21 s;
+**≈ 8 min of wall for the 341 GB `feats.f32`** (390,637 × 19,831 × 11)
+against production's 29 min single assemble on AD. The first rows array died
+in 20 s on `chr16/scores/scores_chunk060.npy`, shape (390637, 1, 11),
+**fortran_order=True**: `ct_sparse_v5` saves `ST.T.astype(f32).reshape(n, G, T)`,
+which copies to C order for G > 1 but is a free view of the transpose for a
+single-gene chunk, so np.save records Fortran order. The values are right and
+production's assembler `np.load`s either order (which is why AD's `feats.f32`
+was byte-identical); only the fast row reader was strict. It now loads such a
+chunk whole once (17 MB) and slices in memory (commit f89f765, checked on
+synthetic chunks of both orders). Exactly one chunk genome-wide is affected
+(header scan over all 1,331 chunk files). `genes_not_in_order.txt` and
+`genes_without_features.txt` empty; `gene_counts.tsv` rows sum to 19,831.
+
+**Submit → `feats.f32`: 17:13 → 19:02 including the failed rows array and
+its resubmission; ≈ 1 h 35 min clean.**
+
+**Comparators** (test AUROC at each seed's best validation threshold, from
+`outputs/ct/<d>/eur/auroc_grid.tsv`; same people as the PRS-Net store):
+
+| disease | cases / people | C+T seeds 0/1/2 | C+T mean | best thresholds | PRS-Net (production, 6 splits) |
+|---|---|---|---|---|---|
+| ad | 3,162 / 380,962 | 0.697 / 0.679 / 0.684 | 0.687 | 1e-5, 1e-4, 1e-4 | 0.709 (0.688–0.728) |
+| uc | 4,385 / 390,637 | 0.634 / 0.609 / 0.601 | 0.615 | 1e-2, 1e-2, 5e-2 | *training, `port/train_chain.sbatch`* |
+
+AD's C+T signal sits in the genome-wide-significant SNPs, uc's in the
+1e-2–5e-2 band; PRS-Net sees all 11 thresholds per gene. Per-seed standard
+errors are ≈ 0.014 (uc) and ≈ 0.017 (ad), so PRS-Net on uc would need ≈ 0.635
+to show AD's +0.02 margin, and anything in 0.60–0.63 is a tie with C+T.
+
+**Training** (`port/train_chain.sbatch`): production's `train_prsnet.py`
+unchanged on the chain's store, one GPU job per split (gpu_b200, 8 CPUs,
+400 GB for `--load ram` of the 341 GB store, 2 h 30), with the AD baseline's
+settings read from its log: 20,000 steps, batch 512, eval batch 128, lr 1e-4,
+eval every 100, early stop 50, STRING ppi graph, seed 22. Output
+`prsnet_chain/uc_eur/train/results.tsv`. *(results to follow)*
