@@ -1018,7 +1018,7 @@ its resubmission; ≈ 1 h 35 min clean.**
 | disease | cases / people | C+T seeds 0/1/2 | C+T mean | best thresholds | PRS-Net (production, 6 splits) |
 |---|---|---|---|---|---|
 | ad | 3,162 / 380,962 | 0.697 / 0.679 / 0.684 | 0.687 | 1e-5, 1e-4, 1e-4 | 0.709 (0.688–0.728) |
-| uc | 4,385 / 390,637 | 0.634 / 0.609 / 0.601 | 0.615 | 1e-2, 1e-2, 5e-2 | *training, `port/train_chain.sbatch`* |
+| uc | 4,385 / 390,637 | 0.634 / 0.609 / 0.601 | 0.615 | 1e-2, 1e-2, 5e-2 | **0.630 (0.608–0.655)**, chain store |
 
 AD's C+T signal sits in the genome-wide-significant SNPs, uc's in the
 1e-2–5e-2 band; PRS-Net sees all 11 thresholds per gene. Per-seed standard
@@ -1030,4 +1030,37 @@ unchanged on the chain's store, one GPU job per split (gpu_b200, 8 CPUs,
 400 GB for `--load ram` of the 341 GB store, 2 h 30), with the AD baseline's
 settings read from its log: 20,000 steps, batch 512, eval batch 128, lr 1e-4,
 eval every 100, early stop 50, STRING ppi graph, seed 22. Output
-`prsnet_chain/uc_eur/train/results.tsv`. *(results to follow)*
+`prsnet_chain/uc_eur/train/results.tsv`. All six jobs completed within the
+request; the four that started together loaded the store in 18–24 min (two
+alone: 2.0 and 5.1 min), so the load is scratch read bandwidth shared across
+jobs, not the GPU node.
+
+| split | seed | best val AUROC | test AUROC | best step | steps run | train min | load min |
+|---|---|---|---|---|---|---|---|
+| 0 | 42 | 0.641 | 0.617 | 6,600 | 11,600 | 59.5 | 2.0 |
+| 1 | 43 | 0.634 | 0.638 | 10,000 | 15,000 | 70.2 | 5.1 |
+| 2 | 44 | 0.662 | 0.643 | 10,000 | 15,000 | 70.7 | 22.7 |
+| 3 | 45 | 0.645 | 0.655 | 9,200 | 14,200 | 65.9 | 23.9 |
+| 4 | 46 | 0.640 | 0.608 | 13,800 | 18,800 | 90.5 | 18.4 |
+| 5 | 47 | 0.646 | 0.620 | 6,100 | 11,100 | 54.3 | 18.5 |
+| mean | | 0.645 | **0.630** | | | 68.5 | |
+
+(Load minutes are listed in log order and are not matched to splits.) Every
+split stopped on the early-stop rule, none on the 20,000-step cap; the
+trainer saw 390,637 samples × 19,831 genes × 11 thresholds, 4,385 cases.
+
+**Verdict.** PRS-Net on uc/eur: test AUROC 0.630 (6 splits, 0.608–0.655)
+against C+T 0.615 (3 seeds, 0.601–0.634). The +0.015 is in the same direction
+as AD's +0.022 (0.709 vs 0.687) but sits at the top of the tie band: with
+per-split SE ≈ 0.014 the difference of means is ≈ 1.5 SE, and three of six
+PRS-Net splits fall below C+T's best seed. The honest reading is a small,
+not-yet-significant edge; scoring C+T on the same six splits would be the
+cheap way to settle it. Both methods
+score uc ≈ 0.07 below AD, consistent with uc's C+T signal living in the
+1e-2–5e-2 band rather than genome-wide-significant SNPs.
+
+End to end, uc/eur went from nothing to a trained, evaluated PRS-Net in one
+evening: chain submit 17:13, `feats.f32` 19:02, training jobs started
+≈ 19:25 (from the log timestamps), longest split ≈ 1 h 55 including load, so
+all six done by ≈ 21:25. On AD the same path took ≈ 44 h of job time for the
+features alone.
