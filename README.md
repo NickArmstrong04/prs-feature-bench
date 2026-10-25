@@ -1104,7 +1104,7 @@ never early-stopped: the four finished splits ran to the trainer's cap
 (18,800–19,531 steps, 95–100 min of training) with best steps of
 13,800–16,500, i.e. still improving slowly at the end. With a 20-min
 shared load on top, two splits did not fit. `port/train_chain.sbatch` now
-asks 4 h; splits 0 and 1 are being rerun.
+asks 4 h; splits 0 and 1 were rerun under it.
 
 | split | seed | best val AUROC | test AUROC | best step | steps run | train min |
 |---|---|---|---|---|---|---|
@@ -1112,13 +1112,18 @@ asks 4 h; splits 0 and 1 are being rerun.
 | 3 | 45 | 0.585 | 0.584 | 14,800 | 19,531 | 97.2 |
 | 4 | 46 | 0.602 | 0.584 | 16,500 | 19,531 | 100.5 |
 | 5 | 47 | 0.595 | 0.598 | 15,800 | 19,531 | 99.3 |
-| 0, 1 | 42, 43 | *rerun at 4 h* | | | | |
+| 0 | 42 | 0.583 | 0.585 | 14,700 | 19,531 | 97.7 |
+| 1 | 43 | 0.595 | 0.593 | 17,600 | 19,531 | 99.1 |
+| mean | | 0.592 | **0.590** | | | 98.2 |
+
+Splits 0 and 1 are the 4-h reruns (30764899, 1:45 and 2:12 elapsed, run two
+at a time so the load was short). Six of six splits ran to the step cap.
 
 **Comparator.** C+T on af/eur (`outputs/ct/af/eur/auroc_grid.tsv`), test
 AUROC at each seed's best validation threshold: 0.592 (1e-4), 0.582 (1e-5),
 0.579 (1e-4); mean **0.584**. Per-seed SE 0.0054 (3,269 test cases).
 
-**Verdict so far.** PRS-Net 0.590 (4 splits, 0.584–0.598) vs C+T 0.584: a
+**Verdict.** PRS-Net 0.590 (6 splits, 0.584–0.598) vs C+T 0.584: a
 +0.006 difference on folds whose SE is 0.005, so a tie. af is the weakest
 of the three diseases for both methods (ad 0.709 / 0.687, uc 0.630 / 0.615,
 af 0.590 / 0.584), and af's signal sits entirely in the genome-wide
