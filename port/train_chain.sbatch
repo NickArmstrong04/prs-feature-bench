@@ -14,8 +14,9 @@
 #  Writes $TRAIN_OUT (default $CHAIN_OUT/train): results.tsv (one row per split, appended),
 #         split<k>_best.pt, split<k>_test_preds.tsv, split<k>_gates.tsv, log.txt, graph.json
 #  Memory: --load ram holds the whole store (n x 19,831 x 11 x 4 bytes: 341 GB at 390,637
-#  people); production asked 400G on gpu_b200. Each split took 36-60 min on a B200 after
-#  2-15 min of loading, so 2 h 30 with margin.
+#  people); production asked 400G on gpu_b200. Time: ad/uc splits early-stopped after
+#  36-90 min of training, but af (32,689 cases) ran to the step cap, 95-100 min, and with
+#  six jobs loading the store at once (18-25 min each) two of six hit a 2 h 30 limit; 4 h.
 # =============================================================================
 #SBATCH --job-name=pnet_train
 #SBATCH --partition=gpu_b200
@@ -23,7 +24,7 @@
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=400G
-#SBATCH --time=2:30:00
+#SBATCH --time=4:00:00
 #SBATCH --array=0-5
 #SBATCH --output=logs/train_chain_%A_%a.out
 #SBATCH --error=logs/train_chain_%A_%a.err

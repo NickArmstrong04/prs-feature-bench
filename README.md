@@ -1064,3 +1064,64 @@ evening: chain submit 17:13, `feats.f32` 19:02, training jobs started
 ≈ 19:25 (from the log timestamps), longest split ≈ 1 h 55 including load, so
 all six done by ≈ 21:25. On AD the same path took ≈ 44 h of job time for the
 features alone.
+
+## 13. af/eur overnight: chain and training queued in one go (2026-10-25)
+
+Second disease without a production PRS-Net run, chosen for the opposite case
+count to uc: 32,689 cases in the same 390,637 people (C+T train/val/test
+26,151 / 3,269 / 3,269 cases). Same path as §12, but the training array was
+submitted immediately with `--dependency=afterok:<finish job>`, so one shell
+session took af from gene files to trained models unattended.
+
+**Chain.** snps step in an salloc (3 min for all 22), 22 chromosome jobs
+30673089–110, all COMPLETED; 12d 30673111–113 (prep 20 s, rows 4:09–6:23,
+finish 16 s). Requests vs use, the giant-gene chromosomes at 1.5× + 10 min:
+
+| chr | window SNPs | largest gene | request | elapsed | | chr | request | elapsed |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 444,052 | 380,740 | 1:30 | 0:38:35 | | 12 | 0:30 | 0:06:33 |
+| 2 | 253,977 | 6,302 | 0:35 | 0:09:33 | | 13 | 0:15 | 0:03:13 |
+| 3 | 291,236 | 120,589 | 0:50 | 0:12:03 | | 14 | 0:50 | 0:10:17 |
+| 4 | 184,984 | 3,851 | 0:30 | 0:06:46 | | 15 | 0:20 | 0:04:42 |
+| 5 | 356,401 | 308,465 | 1:15 | 0:20:26 | | 16 | 0:20 | 0:05:21 |
+| 6 | 251,203 | 87,354 | 0:40 | 0:10:55 | | 17 | 0:50 | 0:13:56 |
+| 7 | 309,932 | 238,918 | 1:05 | 0:17:48 | | 18 | 0:15 | 0:02:46 |
+| 8 | 344,064 | 343,111 | 1:20 | 0:25:43 | | 19 | 0:30 | 0:09:55 |
+| 9 | 262,793 | 254,654 | 1:00 | 0:16:28 | | 20 | 0:20 | 0:03:28 |
+| 10 | 280,337 | 233,473 | 1:00 | 0:15:28 | | 21 | 0:15 | 0:01:53 |
+| 11 | 278,789 | 239,491 | 1:00 | 0:16:27 | | 22 | 0:15 | 0:01:39 |
+
+Every job used 11–43 % of its request. uc's chr1 took 80 of 85 min the day
+before on a *larger* window (506,027 SNPs); af's chr1 took 39 of 90 on
+444,052. Same code, same node class, same CPUs: the difference is the
+cluster's I/O load at the time, so the sizing model cannot be tightened from
+these two points and the 1.5× margin stays. af has fewer window SNPs than uc
+on every chromosome because its C+T P-value filter left fewer variants.
+
+**Training.** Six jobs 30673115_0–5 started together: four COMPLETED
+(1:40–2:11 elapsed), splits 0 and 1 TIMEOUT at 2:30. Unlike ad and uc, af
+never early-stopped: the four finished splits ran to the trainer's cap
+(18,800–19,531 steps, 95–100 min of training) with best steps of
+13,800–16,500, i.e. still improving slowly at the end. With a 20-min
+shared load on top, two splits did not fit. `port/train_chain.sbatch` now
+asks 4 h; splits 0 and 1 are being rerun.
+
+| split | seed | best val AUROC | test AUROC | best step | steps run | train min |
+|---|---|---|---|---|---|---|
+| 2 | 44 | 0.590 | 0.593 | 13,800 | 18,800 | 95.1 |
+| 3 | 45 | 0.585 | 0.584 | 14,800 | 19,531 | 97.2 |
+| 4 | 46 | 0.602 | 0.584 | 16,500 | 19,531 | 100.5 |
+| 5 | 47 | 0.595 | 0.598 | 15,800 | 19,531 | 99.3 |
+| 0, 1 | 42, 43 | *rerun at 4 h* | | | | |
+
+**Comparator.** C+T on af/eur (`outputs/ct/af/eur/auroc_grid.tsv`), test
+AUROC at each seed's best validation threshold: 0.592 (1e-4), 0.582 (1e-5),
+0.579 (1e-4); mean **0.584**. Per-seed SE 0.0054 (3,269 test cases).
+
+**Verdict so far.** PRS-Net 0.590 (4 splits, 0.584–0.598) vs C+T 0.584: a
++0.006 difference on folds whose SE is 0.005, so a tie. af is the weakest
+of the three diseases for both methods (ad 0.709 / 0.687, uc 0.630 / 0.615,
+af 0.590 / 0.584), and af's signal sits entirely in the genome-wide
+significant band (every seed picks 1e-5 or 1e-4; the 0.1–1 thresholds are
+0.04 lower). The step cap, not early stopping, ended every af split, so a
+longer `--n-steps` is the one cheap thing to try before calling af settled.
