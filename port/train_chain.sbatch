@@ -9,6 +9,7 @@
 #      sbatch --export=ALL,DISEASE=uc,COHORT=eur,CHAIN_OUT=/home/naa79/scratch_pi_sz622/naa79/prs-feature-bench/prsnet_chain/uc_eur \
 #             port/train_chain.sbatch                       # 6 jobs, one per split
 #      sbatch --array=0 ...                                 # one split (smoke test: add TRAIN_ARGS="--n-steps 500")
+#      ... GPU_KEEPALIVE=1 ...                               # see below: keeps the idle-GPU monitor off the load
 #
 #  Reads  $CHAIN_OUT/genome/<disease>_<cohort>/feats.f32 (+ feats.meta.json, info.csv)
 #  Writes $TRAIN_OUT (default $CHAIN_OUT/train): results.tsv (one row per split, appended),
@@ -49,6 +50,20 @@ SPLIT=${SLURM_ARRAY_TASK_ID:?run as an array over splits 0-5}
 mkdir -p "$TRAIN_OUT"
 echo "== PRS-Net train $DS split $SPLIT  features $DATA/$DS  graph $PRSNET_GRAPH  -> $TRAIN_OUT  ($(date))"
 nvidia-smi --query-gpu=name,memory.total --format=csv 2>/dev/null || echo "(no GPU visible)"
+# GPU_KEEPALIVE=1: the cluster cancels a GPU job that shows no GPU use for 60 min, and
+# --load ram reads the whole store from scratch before the first forward pass; that read
+# took 2-5 min alone but 60-70 min when a rows array or other users were hammering scratch
+# (three splits lost on 2026-10-25/26). This runs a 2048x2048 matmul every 20 s in the
+# background for the life of the job (~0.1 % of a B200, ~600 MB) so the monitor sees use
+# during the load. It is a workaround of that rule, not a fix of the load -- opt in only.
+if [[ "${GPU_KEEPALIVE:-0}" == 1 ]]; then
+    "$PY" -I -c 'import time, torch
+x = torch.randn(2048, 2048, device="cuda")
+while True:
+    (x @ x).sum().item(); time.sleep(20)' &
+    KEEPALIVE=$!; trap 'kill $KEEPALIVE 2>/dev/null' EXIT
+    echo "gpu keepalive pid $KEEPALIVE"
+fi
 "$PY" -I -W ignore "$ROOT/scripts/slurm/train_prsnet.py" \
     --data-path "$DATA" --dataset "$DS" --graph "$PRSNET_GRAPH" --gene-order "$PRSNET_GENE_ORDER" \
     --out-dir "$TRAIN_OUT" --load ram --splits "$SPLIT" \
