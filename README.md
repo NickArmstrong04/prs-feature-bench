@@ -1227,3 +1227,52 @@ training with the PPI graph and with `--graph-mode identity`, both against
 same disease; then `--assign unique` as its own variant.
 
 **Results.** (none yet)
+
+## 15. Four more diseases in one batch: ms, cad, ckd, scz on eur (2026-10-25/26)
+
+All four chains were submitted within an hour of each other, each with its
+training array queued behind its 12d finish job. Comparator for these is
+C+T **on the authors' six folds** (`outputs/ct_author/<d>/eur/auroc_grid.tsv`,
+seeds 42–47 = PRS-Net splits 0–5, identical test sets), test AUROC at each
+fold's best validation threshold, so the comparison is paired per fold.
+
+**What broke, in order.** (1) 24 training jobs became eligible at once and
+each reads the whole 341 GB store before touching the GPU; some loads passed
+an hour and the cluster's idle-GPU rule cancelled two of them
+(cad split 5, scz split 3). `train_chain.sbatch` now throttles to two
+splits at a time (`%2`), which loads in 2–5 min. (2) ckd's rows array lost
+parts 4 and 5 to OOM at 12 GB; every part's MaxRSS was 12.58 GB, i.e. all
+eight sat on the cgroup limit (block + read buffer + memmap pages) and two
+tipped. Rows jobs now ask 24 GB and 3× time (ckd parts ran 7–11 of 15 min).
+The 22 ckd chromosome jobs themselves completed (chr1 1:27 of 1:40 on
+510,111 window SNPs, the largest yet; 12 of 22 used more than half their
+request, the first chain to do so — same day-to-day I/O swing as §13).
+
+**Results** (PRS-Net test AUROC per split vs C+T on the same fold):
+
+| disease | cases | test cases/fold | PRS-Net splits 0–5 | PRS-Net mean | C+T author folds | C+T mean | paired Δ |
+|---|---|---|---|---|---|---|---|
+| ms | 1,717 | 172 | 0.621 0.701 0.656 0.698 0.668 0.692 | **0.673** | 0.677 0.679 0.629 0.689 0.686 0.694 | 0.676 | −0.007 (SE/fold 0.023) |
+| cad | 20,483 | 2,049 | 0.598 0.618 0.587 0.604 0.605 · | **0.603** (5) | 0.586 0.605 0.579 0.595 0.596 0.598 | 0.592 (5) | **+0.010**, 5/5 folds (SE/fold 0.007) |
+| scz | 841 | 85 | 0.606 0.589 0.580 · 0.594 0.592 | **0.592** (5) | 0.718 0.674 0.715 0.666 0.688 0.660 | 0.691 (5) | **−0.099**, 5/5 folds (SE/fold 0.032) |
+| ckd | 11,381 | 1,139 | *12d rerun + training queued* | | 0.564 0.556 0.546 0.558 0.555 0.559 | 0.556 | |
+
+(· = split rerunning; means over the folds both have.)
+
+- **ms**: a tie, as the fold size predicted. PRS-Net early-stopped at
+  3,500–9,300 steps.
+- **cad**: the uc pattern again — a small edge, but here it is on every fold
+  (+0.008 to +0.014) with fold SE 0.007, so it is the most convincing gain
+  after ad. All five splits ran to the step cap like af (91–112 min), so the
+  edge may grow with more steps.
+- **scz**: PRS-Net loses by ≈ 0.10 on every fold. With 673 training cases
+  the network barely trains (best steps 100–6,300; split 4's best was the
+  first evaluation) while C+T at loose thresholds (0.1–0.5) carries scz's
+  polygenic signal to 0.66–0.73. This is the clearest result of the batch:
+  below ~1,000 cases PRS-Net is not competitive with C+T.
+- **ckd**: C+T is close to chance (0.556); PRS-Net pending.
+
+**Scratch.** Seven runs reached 4.0 TB and shared scratch hit 89 %. uc, af,
+ms and the chain's ad copy were cleaned (`full_run_prep.sh clean`, chr*/ and
+genome/ only; train/ kept), 2.2 TB back. cad and scz wait for their rerun
+splits, ckd for its 12d.
