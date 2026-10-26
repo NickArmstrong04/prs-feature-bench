@@ -32,6 +32,19 @@
 #  delete the bed), CHAIN_MAX_GAP (64), CHAIN_CHUNK_GB (1.0), CHAIN_FORCE=1 (redo stages
 #  whose outputs exist; the default resumes).
 #
+#  Feature set (README s14): CHAIN_FEATURES=ct (default, the above) or ldpred2 --
+#  12b is skipped and 12c sums LDpred2 posterior effects per gene window
+#  (lib/make_ldpred_weights.py -> variants/ldp_sum_v0/sparse_score.py --mode sum),
+#  T = number of channels instead of 11 thresholds; 12d and train_prsnet.py are
+#  unchanged. Needs CHAIN_LDP_CHANNELS (auto | inf | g011-g021 | auto,inf,g035; grid
+#  points must not be diverged in grid_params.tsv) and an EXPLICIT CHAIN_OUT, so the
+#  run never lands in the C+T run dir. Optional: CHAIN_LDP_ASSIGN=shared|unique
+#  (unique: a SNP in overlapping windows goes to the nearest window centre),
+#  CHAIN_LDP_IDMAP / CHAIN_LDP_POSMAP (rsID -> target ID when the .bim IDs are not
+#  rsIDs), CHAIN_LDP_BETAS / CHAIN_LDP_GRID (default $LDP_GEN/{betas.txt,grid_params.tsv}).
+#      CHAIN_FEATURES=ldpred2 CHAIN_LDP_CHANNELS=auto CHAIN_OUT=.../prsnet_chain/ad_eur_ldp_auto \
+#          bash port/submit_chain.sh ad eur
+#
 #  Resources (see submit_chain.sh for the model): chr19 on 4 CPUs took 67 s (bed) + 475 s (clump) +
 #  361 s (score) = 905 s and ~15 GB of scratch while the bed existed. chr1 is 3.5x
 #  the SNPs and holds 8 of the 30 giant genes (300k-469k window SNPs each, 7-30 min
@@ -59,6 +72,7 @@ fi
 export DISEASE COHORT CHR
 ROOT=${ROOT:-/home/naa79/project_pi_sz622/naa79/prs-benchmark}
 BENCH=${BENCH:-/home/naa79/project_pi_sz622/naa79/prs-feature-bench}
+unset RUN                               # config.sh honours an exported RUN over DISEASE/COHORT; --export=ALL would carry a stale one
 source "$ROOT/scripts/slurm/config.sh"
 PRSNET_PY=${PRSNET_PY:-$PRSNET_VENV/bin/python}
 PRSNET_SCRIPT=${PRSNET_SCRIPT:-$ROOT/scripts/slurm/12_prsnet.py}
@@ -74,6 +88,18 @@ OUT=${CHAIN_OUT:-/home/naa79/scratch_pi_sz622/naa79/prs-feature-bench/prsnet_cha
 C=$OUT/chr$CHR
 BED=$C/target_chr${CHR}.PH
 FORCE=${CHAIN_FORCE:-0}
+# feature set: ct (12b + 12c as production) or ldpred2 (no 12b; posterior-effect sums, README s14)
+FEATURES=${CHAIN_FEATURES:-ct}
+if [[ "$FEATURES" == ldpred2 ]]; then
+    : "${CHAIN_LDP_CHANNELS:?CHAIN_FEATURES=ldpred2 needs CHAIN_LDP_CHANNELS (auto | inf | g011-g021 | a,b,c)}"
+    [[ -n "${CHAIN_OUT:-}" ]] || { echo "CHAIN_FEATURES=ldpred2 needs an explicit CHAIN_OUT (never the C+T run dir)"; exit 1; }
+    LDP_ASSIGN=${CHAIN_LDP_ASSIGN:-shared}
+    LDP_BETAS=${CHAIN_LDP_BETAS:-${LDP_GEN:?config.sh does not define LDP_GEN}/betas.txt}
+    LDP_GRID=${CHAIN_LDP_GRID:-$LDP_GEN/grid_params.tsv}
+    for f in "$LDP_BETAS" "$LDP_GRID"; do [[ -f "$f" ]] || { echo "MISSING: $f (step 10 LDpred2 output)"; exit 1; }; done
+elif [[ "$FEATURES" != ct ]]; then
+    echo "CHAIN_FEATURES must be ct or ldpred2, not '$FEATURES'"; exit 1
+fi
 t0=$(date +%s); tlast=$t0
 lap() { local now; now=$(date +%s); printf '== %-28s %6d s  (stage)  %6d s (total)  %s\n' "$1" $((now - tlast)) $((now - t0)) "$(date +%T)"; tlast=$now; }
 need_module() {
@@ -102,8 +128,17 @@ if [[ "$STEP" == 12d || "$STEP" == prep || "$STEP" == rows || "$STEP" == finish 
     [[ -f "$PRSNET_GENE_ORDER" ]] || { echo "MISSING: $PRSNET_GENE_ORDER"; exit 1; }
     ANC=UNK; [[ "$COHORT" == eur || "$COHORT" == caucasian ]] && ANC=EUR
     G=${CHAIN_GENOME_DIR:-$OUT/genome/${DISEASE}_${COHORT}}; mkdir -p "$G"
+    THR=$PRSNET_THRESHOLDS
+    if [[ "$FEATURES" == ldpred2 ]]; then
+        # T = number of channels; 12d's --thresholds only sets T and the labels in feats.meta.json
+        # (parse_thresholds wants increasing floats), so pass 1..T and keep the channel names beside it
+        [[ -f "$OUT/channels.txt" ]] || { echo "MISSING: $OUT/channels.txt (written by the chromosome jobs)"; exit 1; }
+        THR=$(seq -s ' ' 1 "$(wc -l < "$OUT/channels.txt")")
+        cp "$OUT/channels.txt" "$G/channels.txt"
+        echo "features: ldpred2, channels $(tr '\n' ' ' < "$OUT/channels.txt")(T = $(wc -l < "$OUT/channels.txt"))"
+    fi
     COMMON=(--run-dir "$OUT" --gene-order "$PRSNET_GENE_ORDER" --pheno "$PHENO" --ancestry "$ANC"
-            --out-dir "$G" --thresholds "$PRSNET_THRESHOLDS" --expect-n-genes "$PRSNET_N_GENES")
+            --out-dir "$G" --thresholds "$THR" --expect-n-genes "$PRSNET_N_GENES")
     if [[ "$STEP" == 12d ]]; then
         echo "== 12d assemble $DISEASE/$COHORT  run-dir $OUT  ->  $G  ($(date))"
         "$PRSNET_PY" "$PRSNET_SCRIPT" assemble "${COMMON[@]}" --export "${PRSNET_EXPORT:-memmap}" --sample-block 5000
@@ -190,6 +225,7 @@ fi
 echo "bed:    $(wc -l < "$BED.bim") variants x $(wc -l < "$BED.fam") people  ($(du -h "$BED.bed" | cut -f1))"
 
 # --- 12b: production's plink --clump per gene, all genes, largest first --------
+if [[ "$FEATURES" == ct ]]; then
 need_module
 PLINK_MEM_EACH=$(( MEM_MB * 85 / 100 / CPUS )); (( PLINK_MEM_EACH <= ${CHAIN_PLINK_MB:-2500} )) || PLINK_MEM_EACH=${CHAIN_PLINK_MB:-2500}   # plink allocates its whole --memory up front: the 2026-10-23 jobs showed MaxRSS == request
 clump_one() {
@@ -219,11 +255,14 @@ NFAIL=$(awk -F'\t' 'NR>1 && $NF=="failed"' "$C/clump_manifest.tsv" | wc -l)
 echo "12b: $(awk -F'\t' 'NR>1 && $NF=="ok"' "$C/clump_manifest.tsv" | wc -l) ok, $NFAIL failed, $(awk -F'\t' 'NR>1 && $NF=="nosnp"' "$C/clump_manifest.tsv" | wc -l) without SNPs"
 (( NFAIL == 0 )) || { awk -F'\t' 'NR>1 && $NF=="failed" {print "  failed:", $1}' "$C/clump_manifest.tsv"; echo "12b: a plink --clump failed (no .clumped); rerun resumes"; exit 1; }
 lap "12b plink clump"
+else
+    echo "12b: skipped (CHAIN_FEATURES=ldpred2: no clumping; posterior effects of every HapMap3+ window SNP)"
+fi
 
 # --- 12c: ct_sparse_v5 kernel, 12c's chunk layout -------------------------------
 if [[ -f "$C/scores/samples.txt" && "$FORCE" != 1 ]]; then
     echo "12c: $C/scores/samples.txt exists (written after the last chunk) -- kept"
-else
+elif [[ "$FEATURES" == ct ]]; then
     rm -rf "$C/scores"; mkdir -p "$C/scores"     # a partial scores/ left by a killed job is worthless
     "$PRSNET_PY" "$BENCH/lib/make_ct_weights.py" --clumps "$C/clumps" --manifest "$C/clump_manifest.tsv" \
         --gwas "$GQC/gwas.QC.txt" --pvalue "$GQC/SNP.pvalue" --thresholds "$PRSNET_THRESHOLDS" \
@@ -233,6 +272,25 @@ else
         --out "$C/scores" --mode ct --thresholds "$PRSNET_THRESHOLDS" --all-genes "$C/genes_all.txt" \
         --block 4000 --threads "$CPUS" --chunk-gb "${CHAIN_CHUNK_GB:-1.0}" --out-layout chunks
     lap "12c ct_sparse_v5"
+else
+    # LDpred2 posterior effects x gene windows -> long weights; the full step-04 .bim (not the
+    # window-only bed) resolves IDs and makes the intergenic-mass report meaningful
+    rm -rf "$C/scores"; mkdir -p "$C/scores"
+    [[ -f "${TARGET}.PH.bim" ]] || { echo "MISSING: ${TARGET}.PH.bim (step-04 target .bim for the rsID -> target ID map)"; exit 1; }
+    "$PRSNET_PY" "$BENCH/lib/make_ldpred_weights.py" --betas "$LDP_BETAS" --grid-params "$LDP_GRID" \
+        --channels "$CHAIN_LDP_CHANNELS" --assign "$LDP_ASSIGN" --bim "${TARGET}.PH.bim" --windows "$PRSNET_WINDOWS" \
+        --chr "$CHR" --manifest "$MANIFEST" ${CHAIN_LDP_IDMAP:+--id-map "$CHAIN_LDP_IDMAP"} ${CHAIN_LDP_POSMAP:+--pos-map "$CHAIN_LDP_POSMAP"} \
+        --out "$C/ldp_weights.tsv" --genes-out "$C/genes_all.txt" --channels-out "$C/channels.txt" --report "$C/ldp_report.tsv"
+    lap "12c ldpred2 weights"
+    if [[ -f "$OUT/channels.txt" ]]; then
+        cmp -s "$C/channels.txt" "$OUT/channels.txt" || { echo "chr$CHR channels differ from $OUT/channels.txt -- one channel set per run dir"; exit 1; }
+    else
+        cp "$C/channels.txt" "$OUT/channels.txt"
+    fi
+    "$PRSNET_PY" "$BENCH/variants/ldp_sum_v0/sparse_score.py" --bed "$BED" --weights "$C/ldp_weights.tsv" \
+        --out "$C/scores" --mode sum --all-genes "$C/genes_all.txt" --channels "$(tr '\n' ' ' < "$C/channels.txt")" \
+        --block 4000 --threads "$CPUS" --chunk-gb "${CHAIN_CHUNK_GB:-1.0}" --out-layout chunks
+    lap "12c ldp_sum_v0"
 fi
 echo "scores: $(awk 'NR>1' "$C/scores/scores_manifest.tsv" | wc -l) chunks, $(awk 'NR>1' "$C/scores/gene_counts.tsv" | wc -l) genes  ($(du -sh "$C/scores" | cut -f1))"
 
@@ -242,5 +300,5 @@ if [[ "${CHAIN_KEEP_BED:-0}" == 1 ]]; then
 else
     rm -f "$BED.bed"; echo "bed deleted ($BED.bed); .bim/.fam kept"
 fi
-rm -f "$C/ct_weights.tsv"
+rm -f "$C/ct_weights.tsv" "$C/ldp_weights.tsv"     # ldp_report.tsv / channels.txt stay
 lap "chr$CHR done"

@@ -9,6 +9,9 @@
 #             [--no-12d | --12d-only] [--parts 8] [--cmp /prod/feats.f32] [--genome-dir DIR]
 #             [--snps-only] [--scale 1.5] [--after JOBID[:JOBID]]
 #
+#  Feature set (README s14): CHAIN_FEATURES=ldpred2 CHAIN_LDP_CHANNELS=auto CHAIN_OUT=<own dir> in the
+#  environment makes every job sum LDpred2 posterior effects per gene instead of clumping (no 12b);
+#  the sizing drops the clump term and scales 12c's write with the channel count.
 #  --after adds afterok dependencies on already-running jobs (e.g. --12d-only --after <chr1 rerun>).
 #  --scale multiplies every chromosome job's time request (default 1.0; the model's
 #  1.3x + 5 min margin was ~15 % high on the big AD chromosomes and ran out on uc chr1).
@@ -68,6 +71,17 @@ PNET=$ROOT/data/processed/$DISEASE/$COHORT/prsnet
 OUT=${CHAIN_OUT:-/home/naa79/scratch_pi_sz622/naa79/prs-feature-bench/prsnet_chain/${DISEASE}_${COHORT}}
 mkdir -p "$BENCH/logs"
 cd "$BENCH"
+# feature set (README s14): CHAIN_FEATURES=ldpred2 reaches the jobs through --export=ALL; it has no 12b,
+# so the sizing drops the clump term, and 12c's write scales with the channel count T instead of 11
+FEAT=${CHAIN_FEATURES:-ct}; T_CH=11
+if [[ "$FEAT" == ldpred2 ]]; then
+    : "${CHAIN_LDP_CHANNELS:?CHAIN_FEATURES=ldpred2 needs CHAIN_LDP_CHANNELS}"
+    [[ -n "${CHAIN_OUT:-}" ]] || { echo "CHAIN_FEATURES=ldpred2 needs an explicit CHAIN_OUT (never the C+T run dir)"; exit 1; }
+    T_CH=$(awk -v s="$CHAIN_LDP_CHANNELS" 'BEGIN{n=split(s, a, ","); t=0; for (i=1;i<=n;i++) { if (match(a[i], /^g([0-9]+)-g([0-9]+)$/)) { split(substr(a[i],2), r, "-g"); t+=r[2]-r[1]+1 } else if (a[i]!="") t++ } print t}')
+    echo "features: ldpred2  channels $CHAIN_LDP_CHANNELS (T=$T_CH)  assign ${CHAIN_LDP_ASSIGN:-shared}"
+elif [[ "$FEAT" != ct ]]; then
+    echo "CHAIN_FEATURES must be ct or ldpred2"; exit 1
+fi
 echo "run dir: $OUT   bench: $BENCH"
 if (( SNPS == 1 )); then
     echo "gene files -> $OUT/chr<k>/{genes,gene_manifest.tsv,window.snplist}  (STEP=snps, array 1-22, 1 CPU, 8G, 5 min)"
@@ -86,13 +100,18 @@ for k in $CHRS; do
     [[ -f "$M" && -f "$WF" ]] || { printf '%-5s %s\n' "$k" "no gene_manifest.tsv / window.snplist under $PNET/chr$k or $OUT/chr$k -- run --snps-only first; skipped"; continue; }
     W=$(wc -l < "$WF")
     read -r G MAXG TSUM <<< "$(awk 'NR>1 && $4>0 {g++; t+=1+0.0051*$4; if ($4>m) m=$4} END{printf "%d %d %.0f", g, m, t}' "$M")"
-    read -r C MEM BED CLUMP SCORE TSEC TIME NOTE <<< "$(awk -v W="$W" -v MAXG="$MAXG" -v TSUM="$TSUM" -v S="$SCALE" 'BEGIN{
+    read -r C MEM BED CLUMP SCORE TSEC TIME NOTE <<< "$(awk -v W="$W" -v MAXG="$MAXG" -v TSUM="$TSUM" -v S="$SCALE" -v FEAT="$FEAT" -v T="$T_CH" 'BEGIN{
         C = (W > 300000 || MAXG > 200000) ? 8 : 4
         mem = (C == 8) ? "24G" : "16G"      # plink capped at 2.5 GB each (CHAIN_PLINK_MB); python stages < 10 GB
         bed = 67 * W / 156485 * 4 / C
         tmax = 1 + 0.0051 * MAXG
         clump = TSUM / C; if (tmax > clump) clump = tmax
         score = 361 * W / 156485
+        if (FEAT == "ldpred2") {            # no 12b; weights build ~2 min (uncalibrated); write-bound 12c scales with T
+            clump = 120
+            tf = T / 11; if (tf < 0.3) tf = 0.3
+            score = score * tf
+        }
         # giant chromosomes: 1.5x + 10 min (uc chr1 2026-10-24: 12b 3282 s vs 2217 est, 12c 1362 vs 1167,
         # 80 min of an 85 min request); the rest keep 1.3x + 5 min (all 21 finished at 25-75 % of theirs)
         if (MAXG > 100000) tsec = (1.5 * (bed + clump + score) + 600) * S

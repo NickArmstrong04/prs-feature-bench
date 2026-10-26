@@ -36,10 +36,12 @@ prs-feature-bench/
 │   ├── ref_12_prsnet.py    pinned copy of the production scorer (from make_fixture)
 │   ├── from_chunks.py      12c chunk layout -> standard layout
 │   ├── make_ct_weights.py  clumps -> long weights (ct variants)
+│   ├── make_ldpred_weights.py  LDpred2 betas.txt x gene windows -> long weights (§14)
 │   └── dosage_from_raw.py  plink --recode A -> dosage layout (ref_dosage)
 ├── eqtl/
 │   └── weights_to_plink2.py  long-format weights -> plink2 wide score file
 ├── tests/smoke_test.py     synthetic end-to-end test of the Python pieces
+├── tests/test_ldpred_features.py  synthetic test of the LDpred2 feature path incl. production 12d (§14)
 ├── port/                   single submissions: prsnet_chain.sbatch (PRS-Net 12a-12d, §11); PRSNet-2 features sbatch + merge_shards.py (§10)
 ├── prod_snapshot/          READ-ONLY copies of the production scripts (12_prsnet.{sh,py}, trainer,
 │                           config.sh, …); MANIFEST.txt = provenance + md5s. Two optimisation
@@ -55,7 +57,8 @@ prs-feature-bench/
     ├── bed_seek_v1/        v0 with a fused gather+pack kernel (§11)
     ├── ct_sparse_v5/       ct_sparse_v3 writing 12c's chunk layout (§11)
     ├── ref_clump/          reference: 12b's per-gene plink --clump -> golden/clumps (§11)
-    └── clump_np_v0/        12b without plink: one LD pass per chromosome + greedy per gene (§11)
+    ├── clump_np_v0/        12b without plink: one LD pass per chromosome + greedy per gene (§11)
+    └── ldp_sum_v0/         LDpred2-posterior gene features: v5's kernel, --mode sum, fixed gene x channel layout (§14)
 ```
 
 `.gitignore` should hold `fixture/ golden/ runs/ lib/ref_12_prsnet.py`.
@@ -1130,3 +1133,97 @@ af 0.590 / 0.584), and af's signal sits entirely in the genome-wide
 significant band (every seed picks 1e-5 or 1e-4; the 0.1–1 thresholds are
 0.04 lower). The step cap, not early stopping, ended every af split, so a
 longer `--n-steps` is the one cheap thing to try before calling af settled.
+
+
+## 14. LD-aware features: LDpred2 posteriors as the gene features (branch `ld-features`, 2026-10-25)
+
+**Why.** PRS-Net's edge over C+T (ad +0.022, uc +0.015, af a tie, §12–13)
+sits on features built from *marginal* GWAS betas clumped at r² 0.5: every
+gene score carries LD contamination and a SNP in overlapping windows is
+counted by every gene it falls in. LDpred2-grid beats C+T genome-wide on the
+same diseases, so the first question is whether PRS-Net's gain survives once
+the features are LD-clean, or whether the graph was learning the LD
+correction. Of the four ways to put LD into the model (fix the weights, fix
+the partition, whiten the features, learn it end to end), fixing the weights
+is the one that changes nothing but a weight file, and it is the one with a
+known floor: with unique SNP→gene assignment, the gene scores *sum* to the
+genome-wide LDpred2 PRS restricted to windowed SNPs, so an identity graph
+with a linear readout can reproduce it, and anything PRS-Net adds on top is
+headroom the graph earned. The other three wait on this result.
+
+**What exists already.** Production step 10 ran LDpred2 inf/grid/auto on
+HapMap3+ for ad, t2d, uc, af, ms and cad (`$LDP_GEN/betas.txt`, verified
+2026-10-25: tab-separated, header `SNP CHR A1 inf auto g001 … g168`, rsIDs,
+`A1` = the target's own A1 with the sign already reconciled, diverged grid
+models zero-filled; `grid_params.tsv` says which: for ad 94 of 168 diverged,
+every p < 0.0032 on every h² row). `09_evaluate.sh METHOD=ldpred2_grid
+SPLITS=author` gives the genome-wide LDpred2 AUROC on PRS-Net's six folds —
+the floor. The trainer reads T from `feats.meta.json` (any channel count)
+and has `--graph-mode identity` for the floor run. `sparse_score.py --mode
+sum` sums any (gene, snp, a1, channel, beta) file with no clumping, and
+`ref_eqtl_plink2` is its oracle on the fixture. So the whole path is a
+weight builder plus a fixed-layout switch in the kernel.
+
+**Pieces (all on the branch, synthetic test green, nothing run on Bouchet yet).**
+
+- `lib/make_ldpred_weights.py` — `betas.txt` × `gene_windows.tsv` → long
+  weights. Channels by header name (`auto | inf | g### | g011-g021 |
+  a,b,c`), a diverged `g###` refused; rsID → target ID directly, or via
+  `--id-map` / `--pos-map` (rsID chr pos) through the step-04 `.bim`;
+  unmatched rows counted, never guessed; `A1` passed through; window
+  membership `start < pos ≤ end` as `12_prsnet.py snps`; zero betas write no
+  row. `--assign shared` (a SNP in k windows → k rows, the C+T geometry) or
+  `unique` (nearest window centre; ties narrower window, then name). Reports,
+  per channel, the share of the chromosome's Σ|β| that lies outside every
+  window (the intergenic mass the gene features cannot see — if it is large
+  the floor argument needs an intergenic/LD-block node) and the
+  windows-per-SNP histogram.
+- `variants/ldp_sum_v0/` — ct_sparse_v5's kernel with `--mode sum --all-genes
+  --channels "…"`: a fixed gene × channel layout (gene-major, T = channels)
+  and `--out-layout chunks`, i.e. 12c's layout with channels in place of the
+  11 P-bins, plain weighted sums (no cumsum, no SCORE_AVG division), zero
+  columns for genes without a weighted SNP. `run.sh` takes
+  `WEIGHTS=<set>` from `fixture/weights/<set>.tsv` like the eQTL variants.
+- `port/prsnet_chain.sbatch` / `submit_chain.sh` — `CHAIN_FEATURES=ldpred2`
+  with `CHAIN_LDP_CHANNELS` and an explicit `CHAIN_OUT`: 12a as before, 12b
+  skipped, 12c = builder (on `${TARGET}.PH.bim`, the full step-04 bim, so the
+  intergenic report is real) + `ldp_sum_v0`; `channels.txt` written to the
+  run dir and checked equal across chromosomes; 12d gets `--thresholds 1..T`
+  (its `parse_thresholds` wants increasing floats; T is all it uses) and the
+  channel names are copied beside `feats.meta.json`. The chain now also
+  `unset RUN` before sourcing `config.sh` (it honours a stale exported RUN over
+  DISEASE/COHORT). Sizing: no clump term, 12c's write scaled by T/11.
+- `tests/test_ldpred_features.py` — synthetic end to end: builder (pos-map
+  resolution, diverged refusal, shared vs unique, intergenic mass), kernel vs
+  brute-force plink2 scoresum rule (max rel 5.8e-8, `compare.py` PASS),
+  and production's own `12_prsnet.py assemble` over the chunk layout with
+  T = 3 (gene-order placement, zero columns for nodes without features).
+
+**Channel plan.** Row 1: one channel, `auto` — untuned, no fold-selection
+issue, the floor comparison. Row 2: the 11-channel dense ladder
+`g011-g021` (ad: p = 0.0032 … 1 at h² × 0.3, the only full ladder that
+survived divergence) — the same tensor shape as the 11 thresholds, so the
+comparison with the C+T model is layout for layout; before training, check
+the 11 × 11 channel correlation on the store (off-diagonals > 0.95 mean the
+ladder is redundant). Not as a primary: `g011` alone (a boundary model picked
+on one split). No per-fold grid re-selection.
+
+**Two things to record with the first run.** Sum mode has no SCORE_AVG
+division, so a gene score's variance scales with its SNP count; the gene
+encoder's first BatchNorm absorbs most of it (the model also has an unused
+`pre_norm` input BatchNorm). And the LDpred2 panel is production's 503-sample
+1000G EUR with the r² floor and 0.5 shrinkage — the same posteriors the floor
+PRS is scored from, so the comparison is fair, but not the UKB HM3+ matrices.
+
+**Run order.** On the chr19 fixture first: build `fixture/weights/ldp_auto.tsv`
+from ad/eur's `betas.txt` (`--chr 19 --bim fixture/geno.bim`; the fixture bed
+is window-only, so ignore the intergenic line there), `WEIGHTS=ldp_auto
+run_variant.sh ref_eqtl_plink2 --as-golden eqtl_ldp_auto`, then `ldp_sum_v0
+--golden eqtl_ldp_auto`. Then the chain: t2d/eur `auto` if its 12d store
+exists (the row with power: sd 0.002, LDpred2 − C+T = +0.036), else ad/eur
+`auto` (production baseline 0.687 C+T / 0.709 PRS-Net; APOE is off HM3+),
+training with the PPI graph and with `--graph-mode identity`, both against
+`09_evaluate.sh METHOD=ldpred2_auto SPLITS=author`; then the ladder on the
+same disease; then `--assign unique` as its own variant.
+
+**Results.** (none yet)
