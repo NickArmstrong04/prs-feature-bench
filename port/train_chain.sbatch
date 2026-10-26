@@ -17,6 +17,11 @@
 #  people); production asked 400G on gpu_b200. Time: ad/uc splits early-stopped after
 #  36-90 min of training, but af (32,689 cases) ran to the step cap, 95-100 min, and with
 #  six jobs loading the store at once (18-25 min each) two of six hit a 2 h 30 limit; 4 h.
+#  Concurrency: the array is throttled to 2 (%2). The load is a serial read of the 341 GB
+#  store from scratch and slows with every job reading at once; when four diseases' arrays
+#  (24 jobs) became eligible together on 2026-10-25 some loads passed an hour and the
+#  cluster cancelled them for not touching the GPU for 60 min. Two at a time loads in
+#  2-5 min; a disease then takes 3 waves of ~2 h instead of one.
 # =============================================================================
 #SBATCH --job-name=pnet_train
 #SBATCH --partition=gpu_b200
@@ -25,7 +30,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=400G
 #SBATCH --time=4:00:00
-#SBATCH --array=0-5
+#SBATCH --array=0-5%2
 #SBATCH --output=logs/train_chain_%A_%a.out
 #SBATCH --error=logs/train_chain_%A_%a.err
 set -euo pipefail
