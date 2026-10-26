@@ -28,8 +28,10 @@
 #  three on an existing run dir, --cmp makes finish cmp the result against a
 #  file, --genome-dir puts the output elsewhere than $CHAIN_OUT/genome/<d>_<c>.
 #  Rows jobs: production's single 12d took 1737 s / 32 GB (memmap pages); a part
-#  holds one 5000-sample block (4.4 GB) plus the chunk slices it reads, so 12 GB,
-#  2 CPUs, time 2 x 1.3 x 1737/parts + 5 min until the first run calibrates it.
+#  holds one 5000-sample block (4.4 GB), its read buffer and the memmap pages of the
+#  chunk slices it touched (another ~2 x 4.4 GB counted by the cgroup), so 24 GB
+#  (12 GB OOM-killed 2 of 8 ckd/eur parts on 2026-10-25 while 6 passed); 2 CPUs;
+#  time 3 x 1.3 x 1737/parts + 5 min (uc/af/ms/scz parts 4-7.5 min, ckd 7-11 min at P=8).
 #
 #  Sizing model (calibrated on chr19 at 380,962 people, 4 CPUs, README s11:
 #  12a 67 s, 12b 475 s, 12c 361 s for 156,485 window SNPs and 1,525 genes,
@@ -137,7 +139,7 @@ if (( DO_12D == 1 )); then
     [[ -n "$CMP" ]] && EXP+=",CHAIN_CMP=$CMP"
     ALLDEP=("${IDS[@]}"); [[ -n "$AFTER" ]] && ALLDEP+=(${AFTER//:/ })
     DEP=""; (( ${#ALLDEP[@]} > 0 )) && DEP="--dependency=afterok:$(IFS=:; echo "${ALLDEP[*]}")"
-    RSEC=$(awk -v P="$PARTS" 'BEGIN{printf "%d", 2 * 1.3 * 1737 / P + 300}')
+    RSEC=$(awk -v P="$PARTS" 'BEGIN{printf "%d", 3 * 1.3 * 1737 / P + 300}')   # ckd/eur parts ran 7-11 min of a 15-min request at P=8
     RMIN=$(( (RSEC + 299) / 300 * 5 ))
     RTIME=$(printf '%02d:%02d:00' $((RMIN / 60)) $((RMIN % 60)))
     FTIME=0:10:00; [[ -n "$CMP" ]] && FTIME=0:30:00
@@ -150,9 +152,9 @@ if (( DO_12D == 1 )); then
         echo "${j%%;*}"
     }
     JP=$(sub pnet_prep   -                1 4G  0:10:00 "${DEP:--}"                 prep);   JP=${JP%%_*}
-    JR=$(sub pnet_rows   "0-$((PARTS-1))" 2 12G "$RTIME" "--dependency=afterok:$JP" rows);  JR=${JR%%_*}
+    JR=$(sub pnet_rows   "0-$((PARTS-1))" 2 24G "$RTIME" "--dependency=afterok:$JP" rows);  JR=${JR%%_*}
     JF=$(sub pnet_finish -                1 2G  "$FTIME" "--dependency=afterok:$JR" finish); JF=${JF%%_*}
-    printf '12d: prep %s (1 CPU, 4G, 10 min) -> rows %s (%d x 2 CPU, 12G, %s) -> finish %s (1 CPU, 2G, %s%s)\n' \
+    printf '12d: prep %s (1 CPU, 4G, 10 min) -> rows %s (%d x 2 CPU, 24G, %s) -> finish %s (1 CPU, 2G, %s%s)\n' \
         "$JP" "$JR" "$PARTS" "$RTIME" "$JF" "$FTIME" "${CMP:+, cmp vs $CMP}"
     IDS+=("$JP" "$JR" "$JF")
 fi
